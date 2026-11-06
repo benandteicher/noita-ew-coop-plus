@@ -10,6 +10,7 @@ param(
     [switch]$UploadDraft
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'release-preflight.ps1')
 $projectRoot = Split-Path -Parent $PSScriptRoot
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $projectRoot "dist\updater-$Version-build$Build" }
 if (-not $BaselineArchive) { $BaselineArchive = Join-Path $projectRoot 'dist\Noita-EW-Coop-Plus-v1.9-R14-playtest-win.zip' }
@@ -39,10 +40,17 @@ try {
         $repoOwner = & $gh.Source repo view $Repository --json owner --jq .owner.login
         if ($LASTEXITCODE -ne 0 -or $repoOwner.Trim() -ne 'benandteicher') { throw 'Expected the approved personal repository.' }
         $tag = "coopplus-v$Version-b$Build"
-        & $gh.Source release view $tag --repo $Repository --json isDraft 2>$null
-        if ($LASTEXITCODE -eq 0) { throw 'Release tag already exists; never overwrite a previous release.' }
+        $targetState = Assert-CoopPublishingTarget -GhPath $gh.Source -Repository $Repository -Tag $tag -SourceRevision $SourceRevision
+        if (-not $targetState.TagExists) {
+            # Create only an absent ref, never force/update an existing tag. A
+            # concurrent creation or any API failure stops before release upload.
+            & $gh.Source api --method POST "repos/$Repository/git/refs" -f "ref=refs/tags/$tag" -f "sha=$SourceRevision" 1>$null 2>$null
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create the release tag safely; no release was uploaded. Recheck GitHub state before retrying.' }
+        }
+        $verifiedTarget = Assert-CoopPublishingTarget -GhPath $gh.Source -Repository $Repository -Tag $tag -SourceRevision $SourceRevision
+        if (-not $verifiedTarget.TagExists) { throw 'Release tag is unexpectedly missing; refusing to upload.' }
         $assets = @(Get-ChildItem -LiteralPath $OutputDirectory -File | Where-Object { $_.Name -ne 'DRAFT-NOTES.md' } | ForEach-Object { $_.FullName })
-        & $gh.Source release create $tag @assets --repo $Repository --draft --latest=false --target $SourceRevision --title "Co-op+ $Version (build $Build) updater candidate" --notes-file (Join-Path $OutputDirectory 'DRAFT-NOTES.md')
+        & $gh.Source release create $tag @assets --repo $Repository --draft --latest=false --verify-tag --target $SourceRevision --title "Co-op+ $Version (build $Build) updater candidate" --notes-file (Join-Path $OutputDirectory 'DRAFT-NOTES.md')
         if ($LASTEXITCODE -ne 0) { throw 'Draft upload failed; local assets remain available.' }
     }
 } finally {
