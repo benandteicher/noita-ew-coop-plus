@@ -1,0 +1,70 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
+using System.Text;
+using CoopPlus;
+
+// Disposable filesystem tests only. Never touches installed game files or launches the proxy.
+class EngineTests {
+    static string Base; static int passed; static readonly List<string> ExtraRoots=new List<string>();
+    static void Assert(bool b,string message) { if(!b) throw new Exception(message); }
+    static void Run(string name,Action test) { Engine.Fault=null; test(); passed++; Console.WriteLine("PASS " + name); }
+    static void Throws(Action a,string fragment) { try { a(); } catch(Exception e) { if(e.ToString().IndexOf(fragment,StringComparison.OrdinalIgnoreCase)<0) throw new Exception("Wrong failure: "+e,e); return; } throw new Exception("Expected failure: "+fragment); }
+    static void Write(string p,string s) { Directory.CreateDirectory(Path.GetDirectoryName(p)); File.WriteAllText(p,s,new UTF8Encoding(false)); }
+    sealed class Fixture {
+        public string root,game,package; public ReleaseManifest manifest;
+        public Fixture(string name,int build) {
+            string dir=Path.Combine(Base,name); root=Path.Combine(dir,"launcher Ω root"); game=Path.Combine(dir,"Noita 漢 game"); package=Path.Combine(dir,"package.zip");
+            var files=new Dictionary<string,string> { {"mod/quant.ew/mod.xml","<Mod name=\"test\"/>"},{"mod/quant.ew/init.lua","-- fixture"},{"mod/quant.ew/ewext.dll","ewext fixture"},{"mod/quant.ew/NoitaPatcher/noitapatcher.dll","patcher fixture"},{"mod/quant.ew/NoitaPatcher/noitapatcher/nsew/nsew_native.dll","nsew fixture"},{"mod/quant.ew/files/data.txt","mod build "+build},{"proxy/noita_proxy.exe","dummy proxy "+build},{"proxy/steam_api64.dll","steam fixture"},{"proxy/LICENSE-MIT","test license"},{"updater/CoopUpdater.exe","dummy updater "+build} };
+            Directory.CreateDirectory(dir);
+            using(var zip=ZipFile.Open(package,ZipArchiveMode.Create)) foreach(var pair in files) using(var writer=new StreamWriter(zip.CreateEntry(pair.Key).Open(),new UTF8Encoding(false))) writer.Write(pair.Value);
+            manifest=new ReleaseManifest { schema=1,channel="stable",version="1.9.14."+build,build=build,minBootstrap=1,sourceRevision=new string('a',40),officialProxyVersion="1.6.8",package=new PackageInfo {name="package.zip",size=new FileInfo(package).Length,sha256=Engine.Sha256(package),url="https://github.com/benandteicher/noita-ew-coop-plus/releases/download/test/package.zip"},files=files.Select(p=>new FileInfoEntry {path=p.Key,size=Encoding.UTF8.GetByteCount(p.Value),sha256=HashText(p.Value)}).ToArray() };
+        }
+        public void Install() { Engine.Install(root,game,package,manifest); }
+        public void Retarget(Fixture prior) { root=prior.root;game=prior.game; }
+        public string ActiveMod {get{return Path.Combine(game,"mods","quant.ew");}}
+        public string ActiveCurrent {get{return Path.Combine(root,"current");}}
+    }
+    static string HashText(string text) { using(var sha=System.Security.Cryptography.SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(text))).Replace("-","").ToLowerInvariant(); }
+    static string Snapshot(Fixture f) {
+        var rows=new List<string>();
+        foreach(var dir in new[]{f.ActiveMod,f.ActiveCurrent}) if(Directory.Exists(dir)) foreach(string file in Directory.EnumerateFiles(dir,"*",SearchOption.AllDirectories).OrderBy(x=>x)) rows.Add(file.Substring(dir.Length)+"="+Engine.Sha256(file));
+        return String.Join("\n",rows);
+    }
+    static void Rehash(Fixture f) {f.manifest.package.size=new FileInfo(f.package).Length;f.manifest.package.sha256=Engine.Sha256(f.package);}
+    static string Quote(string s) {return "\""+s.Replace("\"","\\\"")+"\"";}
+    static void Main(string[] args) {
+        if(args.Length>0 && args[0]=="--crash-worker") {
+            Engine.Progress=null; Engine.Fault=p=>{if(p==args[5])Environment.Exit(99);};
+            Engine.Install(args[1],args[2],args[3],Engine.ParseManifest(File.ReadAllText(args[4])));Environment.Exit(98);return;
+        }
+        Base=Path.Combine(Path.GetTempPath(),"CoopPlus Engine tests "+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(Base); Engine.Progress=null;
+        try {
+            Run("numeric version comparison and zero components",()=> {Assert(Engine.CompareVersions("1.10","1.9.99")>0,"lexical comparison");Assert(Engine.CompareVersions("1.2","1.2.0.0")==0,"normalized components");});
+            Run("manifest round trip and explicit unsupported bootstrap",()=> {var f=new Fixture("manifest",1);var copy=Engine.ParseManifest(Engine.SerializeManifest(f.manifest));Assert(copy.build==1&&copy.files.Length==10,"roundtrip");f.manifest.minBootstrap=2;Throws(()=>Engine.ValidateManifest(f.manifest),"requires Co-op+ bootstrap 2");});
+            Run("first setup spaces Unicode and complete verification",()=> {var f=new Fixture("first",1);Write(Path.Combine(f.root,"current","updater","CoopUpdater.exe"),"seed updater");f.Install();Assert(Engine.VerifyInstalled(f.root,f.game).build==1,"first install");Assert(!File.Exists(Path.Combine(f.root,"install-journal.json")),"journal retained");});
+            Run("already-current verification is read only",()=> {var f=new Fixture("current",1);f.Install();string before=Snapshot(f);Engine.VerifyInstalled(f.root,f.game);Assert(before==Snapshot(f),"verification changed files");});
+            Run("official generated cosmetics and proxy logs remain launchable",()=> {var f=new Fixture("generated",1);f.Install();Write(Path.Combine(f.ActiveCurrent,"proxy","ew_log.txt"),"runtime log");Write(Path.Combine(f.ActiveCurrent,"proxy","ew_log_old.txt"),"runtime old log");Write(Path.Combine(f.ActiveMod,"files","system","player","tmp","0000000000000001_dc.xml"),"generated");Write(Path.Combine(f.ActiveMod,"files","system","player","tmp","0000000000000001_ragdoll_head.png"),"generated");Write(Path.Combine(f.ActiveMod,"files","system","player","tmp","no_amulet"),"");Write(Path.Combine(f.ActiveMod,"data","generated","sprite_uv_maps","mods.quant.ew.files.system.player.tmp.0000000000000001.png"),"generated");Engine.VerifyInstalled(f.root,f.game);Write(Path.Combine(f.ActiveMod,"files","system","player","tmp","unexpected.lua"),"bad");Throws(()=>Engine.VerifyInstalled(f.root,f.game),"Unexpected managed file");});
+            Run("launcher C drive and game D drive stage safely",()=> {var f=new Fixture("cross-volume",1);string extra=Path.Combine("D:\\","CoopPlus disposable tests "+Guid.NewGuid().ToString("N"));ExtraRoots.Add(extra);f.game=Path.Combine(extra,"Noita 漢 game");f.Install();Engine.VerifyInstalled(f.root,f.game);});
+            foreach(int old in new[]{1,2}) {int older=old;Run("skipped-version upgrade from state "+older,()=> {var f=new Fixture("older"+older,older);f.Install();Write(Path.Combine(f.ActiveMod,"obsolete.lua"),"obsolete");Write(Path.Combine(f.root,"user","proxy.ron"),"settings");Write(Path.Combine(f.game,"saves","save00"),"save");var next=new Fixture("newer"+older,10);next.Retarget(f);next.Install();Assert(!File.Exists(Path.Combine(f.ActiveMod,"obsolete.lua")),"obsolete remained");Assert(File.ReadAllText(Path.Combine(f.root,"user","proxy.ron"))=="settings","settings changed");Assert(File.ReadAllText(Path.Combine(f.game,"saves","save00"))=="save","save changed");Assert(File.ReadAllText(Path.Combine(f.ActiveCurrent,"updater","CoopUpdater.exe"))=="dummy updater 10","updater not replaced");Assert(Directory.EnumerateFiles(Path.Combine(f.game,".coopplus-backups"),"obsolete.lua",SearchOption.AllDirectories).Any(),"old mod not retained");Engine.VerifyInstalled(f.root,f.game);});}
+            foreach(string point in new[]{"after-mod-backup","after-mod-install","after-current-backup","after-current-install","before-commit"}) {string phase=point;Run("rollback "+phase,()=> {var f=new Fixture("rollback "+phase,1);f.Install();string before=Snapshot(f);var next=new Fixture("rollback-new "+phase,9);next.Retarget(f);Engine.Fault=p=>{if(p==phase)throw new IOException("injected "+phase);};Throws(()=>next.Install(),"prior complete installation was restored");Engine.Fault=null;Assert(Snapshot(f)==before,"rollback changed prior bytes");Engine.VerifyInstalled(f.root,f.game);});}
+            Run("first-install failure restores seed and original mod",()=> {var f=new Fixture("first failure",1);Write(Path.Combine(f.root,"current","updater","CoopUpdater.exe"),"seed");Write(Path.Combine(f.ActiveMod,"old.lua"),"old mod");string before=Snapshot(f);Engine.Fault=p=>{if(p=="after-current-install")throw new IOException("injected");};Throws(()=>f.Install(),"prior complete installation was restored");Engine.Fault=null;Assert(Snapshot(f)==before,"first rollback did not restore");});
+            Run("abrupt process exit journal restores complete prior install",()=> {var f=new Fixture("crash-prior",1);f.Install();string before=Snapshot(f);var next=new Fixture("crash-next",8);next.Retarget(f);string mf=Path.Combine(Base,"crash manifest.json");File.WriteAllText(mf,Engine.SerializeManifest(next.manifest));var start=new ProcessStartInfo(System.Reflection.Assembly.GetExecutingAssembly().Location,String.Join(" ",new[]{"--crash-worker",next.root,next.game,next.package,mf,"after-current-backup"}.Select(Quote))) {UseShellExecute=false,CreateNoWindow=true};using(var child=Process.Start(start)){Assert(child.WaitForExit(30000),"crash child timed out");Assert(child.ExitCode==99,"crash did not reach fault");}Assert(File.Exists(Path.Combine(f.root,"install-journal.json")),"journal missing after crash");Assert(!Directory.Exists(f.ActiveCurrent),"fault wrong phase");Engine.Recover(f.root,f.game);Assert(Snapshot(f)==before,"crash recovery changed prior install");Engine.VerifyInstalled(f.root,f.game);});
+            Run("locked managed file blocks update before mutation",()=> {var f=new Fixture("locked",1);f.Install();string before=Snapshot(f);var next=new Fixture("locked-next",2);next.Retarget(f);using(var locked=File.Open(Path.Combine(f.ActiveMod,"mod.xml"),FileMode.Open,FileAccess.Read,FileShare.Read)) Throws(()=>next.Install(),"being used by another process");Assert(Snapshot(f)==before,"locked install changed bytes");});
+            Run("corrupt package preserves old complete install",()=> {var f=new Fixture("corrupt-old",1);f.Install();string before=Snapshot(f);var next=new Fixture("corrupt-new",2);next.Retarget(f);using(var s=new FileStream(next.package,FileMode.Append)) s.WriteByte(0);Throws(()=>next.Install(),"Package size/SHA-256 mismatch");Assert(Snapshot(f)==before,"corruption changed installation");});
+            Run("invalid file metadata rejects duplicate case and traversal",()=> {var f=new Fixture("invalid",1);f.manifest.files[1].path="mod/quant.ew/../escape";Throws(()=>Engine.ValidateManifest(f.manifest),"Invalid or duplicate");f.manifest.files[1].path="MOD/QUANT.EW/MOD.XML";Throws(()=>Engine.ValidateManifest(f.manifest),"Invalid or duplicate");});
+            Run("unlisted traversal archive entry rejected",()=> {var f=new Fixture("traversal",1);using(var z=ZipFile.Open(f.package,ZipArchiveMode.Update))using(var w=new StreamWriter(z.CreateEntry("../escaped.txt").Open()))w.Write("bad");Rehash(f);Throws(()=>f.Install(),"Unsafe archive path");Assert(!File.Exists(Path.Combine(Base,"escaped.txt")),"escaped extraction");});
+            Run("symlink archive entry rejected",()=> {var f=new Fixture("link",1);using(var z=ZipFile.Open(f.package,ZipArchiveMode.Update)){var e=z.GetEntry("proxy/LICENSE-MIT");e.ExternalAttributes=unchecked((int)0xA1FF0000);}Rehash(f);Throws(()=>f.Install(),"Unsafe archive path/link");});
+            Run("missing managed file rejects incomplete package",()=> {var f=new Fixture("missing",1);using(var z=ZipFile.Open(f.package,ZipArchiveMode.Update))z.GetEntry("proxy/LICENSE-MIT").Delete();Rehash(f);Throws(()=>f.Install(),"Package is incomplete");});
+            Run("file hash mismatch rejects tampered payload",()=> {var f=new Fixture("tamper",1);f.manifest.files[0].sha256=new string('0',64);Throws(()=>f.Install(),"incorrect size/hash");});
+            Run("source checkout and overlapping paths protected",()=> {var f=new Fixture("source",1);Directory.CreateDirectory(Path.Combine(f.root,".git"));Throws(()=>f.Install(),"source checkout");Throws(()=>Engine.ValidateInstallPaths(f.root,Path.Combine(f.root,"game")),"separate");});
+            Run("junction installation boundary rejected",()=> {var f=new Fixture("junction",1);string target=Path.Combine(Base,"junction target");Directory.CreateDirectory(target);Directory.CreateDirectory(Path.GetDirectoryName(f.root));using(var p=Process.Start(new ProcessStartInfo("cmd.exe","/c mklink /J "+Quote(f.root)+" "+Quote(target)) {UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true})){string output=p.StandardOutput.ReadToEnd()+p.StandardError.ReadToEnd();p.WaitForExit();Assert(p.ExitCode==0,"junction creation failed: "+output);}try{Throws(()=>f.Install(),"Links/reparse points");}finally{Directory.Delete(f.root);}});
+            Run("invalid recovery journal cannot select external targets",()=> {var f=new Fixture("journal",1);f.Install();Write(Path.Combine(f.root,"install-journal.json"),"{\"schema\":1,\"root\":\"C:\\\\other\",\"game\":\"C:\\\\other\",\"id\":\"../escape\"}");Throws(()=>Engine.Recover(f.root,f.game),"does not match");});
+            Run("offline HTTPS check leaves existing install usable",()=> {var f=new Fixture("offline",1);f.Install();string before=Snapshot(f);Throws(()=>Engine.StageDownload("https://127.0.0.1:1/package.zip",Path.Combine(f.root,"downloads","offline.zip"),1,new string('0',64)),"connect");Assert(Snapshot(f)==before,"offline changed installation");});
+            Console.WriteLine("RESULT "+passed+" focused engine cases passed. Disposable root: "+Base);
+        } finally {Engine.Fault=null; if(Directory.Exists(Base))Directory.Delete(Base,true);foreach(string path in ExtraRoots)if(Directory.Exists(path))Directory.Delete(path,true);}
+    }
+}

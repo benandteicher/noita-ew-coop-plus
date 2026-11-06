@@ -1,0 +1,15 @@
+<Entity name="ew_local_ritual" tags="ew_no_enemy_sync,ew_ritual_cosmetic,no_save">
+  <ParticleEmitterComponent
+    emitted_material_name="spark_green"
+    create_real_particles="0" emit_real_particles="0" emit_cosmetic_particles="1"
+    collide_with_grid="0" collide_with_gas_and_fire="0" cosmetic_force_create="1"
+    render_on_grid="0" render_back="0" render_ultrabright="0"
+    fade_based_on_lifetime="1" draw_as_long="1"
+    lifetime_min="0.18" lifetime_max="0.42"
+    count_min="2" count_max="2"
+    emission_interval_min_frames="2" emission_interval_max_frames="2"
+    x_vel_min="-3" x_vel_max="3" y_vel_min="-14" y_vel_max="-5"
+    gravity.y="-7" airflow_force="0.1" airflow_time="0.2" airflow_scale="0.05"
+    is_emitting="0" />
+  <LifetimeComponent lifetime="30" />
+</Entity>
