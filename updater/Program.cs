@@ -10,26 +10,32 @@ using System.Threading;
 using System.Web.Script.Serialization;
 
 namespace CoopPlus {
-    public sealed class UserConfig { public int schema = 1; public string gameDir; public string settingsPath; public string saveStatePath; }
     internal static class Program {
         internal const string Repository = "benandteicher/noita-ew-coop-plus";
         internal const string Feed = "https://api.github.com/repos/" + Repository + "/releases/latest";
         private static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 8 * 1024 * 1024 };
+        internal static bool ForceConsole;
+        [STAThread]
         private static int Main(string[] args) {
+            if (args.Length == 2 && args[0] == "--internal-handoff") return ProxyHandoff.Worker(args[1]);
             try {
                 Console.InputEncoding = new UTF8Encoding(false);
                 Console.OutputEncoding = new UTF8Encoding(false);
+                Console.Title = "Co-op+";
                 if (args.Length < 3 || args[0] != "--internal-root" || args[2] != "--")
                     throw new ArgumentException("Open CoopPlus.exe to run the updater.");
                 string root = Path.GetFullPath(args[1]); Guard(root);
                 string[] forwarded = args.Skip(3).ToArray();
                 if (forwarded.Length == 1 && forwarded[0] == "--coop-help") {
-                    Console.WriteLine("Co-op+ bootstrap protocol 1. Open without arguments for setup/update/launch. Official proxy arguments are forwarded unchanged. --coop-check performs checks/installation without launching; --coop-setup selects a Noita folder."); return 0;
+                    Console.WriteLine("Co-op+ bootstrap protocol 1. Open without arguments for setup/update/launch. Official proxy arguments are forwarded unchanged. --coop-check performs checks/installation without launching; --coop-setup finds/selects Noita; --coop-shortcut offers a desktop shortcut; --coop-console retains deliberate console launching."); return 0;
                 }
                 bool checkOnly = forwarded.Contains("--coop-check");
                 bool setup = forwarded.Contains("--coop-setup");
-                forwarded = forwarded.Where(a => a != "--coop-check" && a != "--coop-setup").ToArray();
-                var config = ReadConfig(root, setup);
+                bool shortcut = forwarded.Contains("--coop-shortcut");
+                ForceConsole = forwarded.Contains("--coop-console");
+                forwarded = forwarded.Where(a => a != "--coop-check" && a != "--coop-setup" && a != "--coop-shortcut" && a != "--coop-console").ToArray();
+                var config = Setup.Load(root, setup, forwarded);
+                if (shortcut) { Setup.OfferShortcut(root, config.gameDir); return 0; }
                 Guard(config.gameDir);
                 string key;
                 using (var hash = SHA256.Create()) key = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(Path.GetFullPath(config.gameDir).TrimEnd('\\').ToUpperInvariant()))).Replace("-", "");
@@ -43,46 +49,13 @@ namespace CoopPlus {
                     }
                     finally { gate.ReleaseMutex(); }
                 }
-            } catch (Exception e) { Console.Error.WriteLine("Co-op+: " + e.Message); return 1; }
+            } catch (OperationCanceledException e) { Console.WriteLine(e.Message); return 0; }
+            catch (Exception e) { Console.Error.WriteLine("Co-op+: " + e.Message); return 1; }
         }
-        private static UserConfig ReadConfig(string root, bool setup) {
-            string path = Path.Combine(root, "coopplus.json");
-            UserConfig c = !setup && File.Exists(path) ? Json.Deserialize<UserConfig>(File.ReadAllText(path)) : null;
-            if (c == null) {
-                Console.WriteLine("One-time Co-op+ setup. Close Noita and every official proxy first.");
-                Console.WriteLine("Enter your Noita installation folder (the folder containing noita.exe).");
-                Console.WriteLine("Co-op+ replaces mods/quant.ew completely and keeps a backup outside mods.");
-                Console.Write("Noita folder: ");
-                string input = Console.ReadLine();
-                if (String.IsNullOrWhiteSpace(input)) throw new IOException("Setup cancelled; no installation changed.");
-                string game = Path.GetFullPath(input.Trim().Trim('"')); Guard(game);
-                if (!File.Exists(Path.Combine(game, "noita.exe"))) throw new IOException("That folder does not contain noita.exe.");
-                if (Within(root, game) || Within(game, root)) throw new IOException("Keep the Co-op+ launcher folder separate from the game folder.");
-                Console.WriteLine("Old portable proxy folder, if it contains proxy.ron (Enter uses the official AppData settings/saves):");
-                string portable = Console.ReadLine();
-                string appdata = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-                string settings = Path.Combine(appdata, "quant", "entangledworlds", "config", "proxy.ron");
-                string saves = Path.Combine(appdata, "quant", "entangledworlds", "data", "save_state");
-                if (!String.IsNullOrWhiteSpace(portable)) {
-                    portable = Path.GetFullPath(portable.Trim().Trim('"')); Guard(portable);
-                    settings = Path.Combine(portable, "proxy.ron"); saves = Path.Combine(portable, "save_state");
-                    if (!File.Exists(settings)) throw new IOException("Old portable folder does not contain proxy.ron; setup cancelled.");
-                }
-                c = new UserConfig { gameDir = game, settingsPath = settings, saveStatePath = saves };
-                ValidateMutable(root, game, c.settingsPath); ValidateMutable(root, game, c.saveStatePath);
-                Engine.CheckNotBusy();
-                File.WriteAllText(path, Json.Serialize(c), Encoding.UTF8);
-            }
-            if (c.schema != 1 || String.IsNullOrWhiteSpace(c.gameDir) || !Path.IsPathRooted(c.gameDir)) throw new IOException("Unsupported/invalid coopplus.json; use --coop-setup.");
-            if (!File.Exists(Path.Combine(c.gameDir, "noita.exe"))) throw new IOException("Configured Noita folder is unavailable; use --coop-setup.");
-            if (Within(root, c.gameDir) || Within(c.gameDir, root)) throw new IOException("Launcher and game folders must be separate.");
-            ValidateMutable(root, c.gameDir, c.settingsPath); ValidateMutable(root, c.gameDir, c.saveStatePath);
-            return c;
-        }
-        private static void ValidateMutable(string root, string game, string path) {
+        internal static void ValidateMutable(string root, string game, string path) {
             if (String.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path)) throw new IOException("Invalid mutable settings/save path; use --coop-setup.");
             Guard(path);
-            if (Within(path, Path.Combine(root, "current")) || Within(path, Path.Combine(game, "mods"))) throw new IOException("Settings/saves must be outside managed payloads and active mods.");
+            if (Within(path, Path.Combine(root, "current")) || (!String.IsNullOrWhiteSpace(game) && Path.IsPathRooted(game) && Within(path, Path.Combine(game, "mods")))) throw new IOException("Settings/saves must be outside managed payloads and active mods.");
         }
         private static bool Within(string child, string parent) {
             string a = Path.GetFullPath(child).TrimEnd('\\') + "\\", b = Path.GetFullPath(parent).TrimEnd('\\') + "\\";
@@ -95,15 +68,26 @@ namespace CoopPlus {
             if (recovering) { Console.WriteLine("Recovery finished; restarting the current managed updater."); return 42; }
             string installed = Path.Combine(root, "current", "installed.json");
             ReleaseManifest current = File.Exists(installed) ? Engine.ParseManifest(File.ReadAllText(installed)) : null;
-            bool ready = current != null;
+            bool ready = current != null && !Setup.Stored(root).pendingInstall;
             if (ready) Engine.VerifyInstalled(root, game);
             ReleaseManifest next = null;
             Console.WriteLine("Checking approved Co-op+ releases...");
             try { next = ReleaseProvider(); }
             catch (UnsupportedBootstrapException) { throw; }
             catch (Exception e) { Console.WriteLine("Update check unavailable: " + e.Message); }
+            ReleaseManifest seed = null;
+            string seedDirectory = Path.Combine(root, "seed");
+            if (!ready && File.Exists(Path.Combine(seedDirectory, "release.json"))) {
+                Guard(seedDirectory);
+                seed = Engine.ParseManifest(File.ReadAllText(Path.Combine(seedDirectory, "release.json")));
+            }
+            // A freshly extracted review bundle must not downgrade itself to an
+            // older public Latest. Installed clients still use only the fixed feed.
+            bool seedEligible = CompleteTarget(seed, current);
+            bool feedEligible = CompleteTarget(next, current);
+            bool useSeed = !ready && seedEligible && (!feedEligible || !IsNewer(next, seed));
             bool changed = false;
-            if (next != null && (current == null || IsNewer(next, current))) {
+            if (!useSeed && feedEligible && (!ready || IsNewer(next, current))) {
                 string staging = Path.Combine(root, "downloads"); Guard(staging); Directory.CreateDirectory(staging);
                 string zip = Path.Combine(staging, "package-" + next.build + ".zip");
                 try {
@@ -119,16 +103,22 @@ namespace CoopPlus {
                 } finally { if (File.Exists(zip)) File.Delete(zip); }
             } else if (current != null) Console.WriteLine("Installed release is current (" + current.version + ", build " + current.build + ").");
             if (!ready) {
-                Console.WriteLine("Installing bundled review candidate. This seed is not a published update channel.");
-                string seed = Path.Combine(root, "seed"); Guard(seed);
-                var manifest = Engine.ParseManifest(File.ReadAllText(Path.Combine(seed, "release.json")));
-                Engine.Install(root, game, Path.Combine(seed, "package.zip"), manifest); changed = true;
+                if (!seedEligible) throw new IOException("This Noita folder needs a complete installation of the current or newer build, but that package is unavailable. Keep existing proxy state and retry with the matching bootstrap bundle or an available approved release.");
+                Console.WriteLine("Installing bundled setup candidate " + seed.version + " (build " + seed.build + "). This does not publish a release.");
+                Engine.Install(root, game, Path.Combine(seedDirectory, "package.zip"), seed); changed = true;
             }
             Engine.VerifyInstalled(root, game);
+            Setup.MarkInstalled(root);
             if (changed) { Console.WriteLine("Complete installation ready; restarting the managed updater."); return 42; }
             if (checkOnly) { Console.WriteLine("Installation verified. Check-only mode: no proxy launched."); return 0; }
             Engine.CheckNotBusy();
             return Launch(root, game, forwarded);
+        }
+        private static bool CompleteTarget(ReleaseManifest candidate, ReleaseManifest current) {
+            if (candidate == null) return false;
+            if (current == null) return true;
+            if (candidate.build == current.build) return Engine.CompareVersions(candidate.version, current.version) == 0 && String.Equals(candidate.package.sha256, current.package.sha256, StringComparison.OrdinalIgnoreCase);
+            return candidate.build > current.build && IsNewer(candidate, current);
         }
         internal static bool IsNewer(ReleaseManifest next, ReleaseManifest current) {
             int comparison = Engine.CompareVersions(next.version, current.version);
@@ -187,11 +177,13 @@ namespace CoopPlus {
             if (!HasOption(args, "--save-state-path")) { all.Add("--save-state-path"); all.Add(config.saveStatePath); }
             if (!HasOption(args, "--exe-path")) { all.Add("--exe-path"); all.Add(Path.Combine(game, "noita.exe")); }
             all.AddRange(args);
+            if (!ConsoleMode(args)) return ProxyHandoff.Launch(Path.Combine(proxy, "noita_proxy.exe"), proxy, all.ToArray());
             var start = new ProcessStartInfo(Path.Combine(proxy, "noita_proxy.exe"), String.Join(" ", all.Select(Quote))) { UseShellExecute = false, WorkingDirectory = proxy };
             start.EnvironmentVariables["NP_SKIP_MOD_CHECK"] = "1";
-            Console.WriteLine("Opening unchanged official proxy. Keep this launcher open until the proxy closes.");
+            Console.WriteLine("Opening official proxy in the requested console mode.");
             using (var process = Process.Start(start)) { process.WaitForExit(); return process.ExitCode; }
         }
+        internal static bool ConsoleMode(string[] args) { return ForceConsole || HasOption(args, "--host") || HasOption(args, "--lobby") || args.Any(a => a == "--help" || a == "-h"); }
         private static void ValidateForwarded(string root, string game, string proxy, string[] args) {
             foreach (string option in new [] { "--settings-path", "--save-state-path", "--exe-path" }) {
                 for (int i = 0; i < args.Length; i++) {

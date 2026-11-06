@@ -22,13 +22,13 @@ only). The friend's Windows 11 PC needs neither Python, Git, GitHub sign-in nor
 developer tools. Pass the exact publication commit SHA, then run:
 
 ```powershell
-.\updater\build-release.ps1 -SourceRevision 'PUBLICATION_COMMIT_40_HEX' -Version '1.9.14.1' -Build 1 -BaselineArchive 'D:\Entangled Worlds FORK\dist\Noita-EW-Coop-Plus-v1.9-R14-playtest-win.zip' -OutputDirectory 'D:\CoopPlus-artifacts-new'
+.\updater\build-release.ps1 -SourceRevision 'PUBLICATION_COMMIT_40_HEX' -Version '1.9.14.2' -Build 2 -BaselineArchive 'D:\Entangled Worlds FORK\dist\Noita-EW-Coop-Plus-v1.9-R14-playtest-win.zip' -OutputDirectory 'D:\CoopPlus-artifacts-new'
 ```
 
 The wrapper requires that commit to be HEAD and the source checkout to be clean.
 The tag is `coopplus-v1.9.14.1-b1`; the updater verifies this exact tag convention.
 
-The first candidate copies **all 580 mod files byte-for-byte** from the preserved
+The updater-only candidates copy **all 580 mod files byte-for-byte** from the preserved
 R14 playtest archive. The builder verifies its pinned SHA-256 and embedded
 manifest. It retains the official v1.6.8 proxy, DLLs, MIT/Apache licenses and
 third-party notices. The bootstrap ZIP includes a full seed package for initial
@@ -54,7 +54,7 @@ the local authenticated personal login/repository, creates a **draft** with
 It never publishes a release. Authenticate through the official `gh auth login
 --hostname github.com --web` handoff if needed; never extract or paste tokens.
 
-The first release remains draft. Draft assets are **not** available to anonymous
+Build 1 is published Latest; build 2 usability candidate remains draft. Draft assets are **not** available to anonymous
 updater clients. Publication after independent review is a separate deliberate
 action: approve the payload, publish the release as a non-prerelease with the
 required assets, then enable/designate it as the approved release feed candidate.
@@ -79,3 +79,9 @@ The one-time setup retains the proxy's verified v1.6.8 Windows mutable locations
 folder is supplied during setup, its existing `proxy.ron` and `save_state` paths
 are kept in configuration. Neither is copied into replaceable payload folders.
 Explicit official proxy settings/save arguments are forwarded.
+
+Build 2 compiles the read-only Noita discovery, native Windows setup, and short-lived
+graphical proxy handoff into the single managed updater EXE. Protocol 1 and its
+package roots remain unchanged. Embedded bootstrap icon/file metadata apply only
+to new bootstrap builds; root CoopPlus.exe is never replaced by routine updates.
+Keep the published-build-1 to next-published-build test pending until approval.

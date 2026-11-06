@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][ValidatePattern('^[0-9a-f]{40}$')][string]$SourceRevision,
-    [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')][string]$Version = '1.9.14.1',
-    [ValidateRange(1,2147483647)][int]$Build = 1,
+    [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')][string]$Version = '1.9.14.2',
+    [ValidateRange(1,2147483647)][int]$Build = 2,
     [string]$OutputDirectory,
     [string]$BaselineArchive,
     [ValidateSet('r14','checkout')][string]$RuntimeSource = 'r14',
@@ -25,9 +25,23 @@ if (-not (Test-Path -LiteralPath $compiler)) { throw 'Build computer requires th
 $buildTemp = Join-Path ([IO.Path]::GetTempPath()) ('coopplus-build-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $buildTemp | Out-Null
 try {
-    & $compiler /nologo /optimize+ /target:exe /platform:anycpu "/out:$buildTemp\CoopPlus.exe" (Join-Path $PSScriptRoot 'Bootstrap.cs')
+    $metadata = @"
+using System.Reflection;
+[assembly: AssemblyTitle("Co-op+")]
+[assembly: AssemblyProduct("Noita Entangled Worlds: Co-op+")]
+[assembly: AssemblyDescription("Co-op+ approved-release launcher and updater")]
+[assembly: AssemblyCompany("Co-op+ contributors")]
+[assembly: AssemblyCopyright("IntQuant and contributors; MIT or Apache-2.0; see bundled notices")]
+[assembly: AssemblyVersion("1.0.0.0")]
+[assembly: AssemblyFileVersion("$Version")]
+[assembly: AssemblyInformationalVersion("$Version (build $Build)")]
+"@
+    $metadataPath = Join-Path $buildTemp 'AssemblyInfo.cs'
+    [IO.File]::WriteAllText($metadataPath, $metadata)
+    $icon = Join-Path $projectRoot 'noita_proxy\assets\icon.ico'
+    & $compiler /nologo /optimize+ /target:exe /platform:anycpu "/out:$buildTemp\CoopPlus.exe" "/win32icon:$icon" (Join-Path $PSScriptRoot 'Bootstrap.cs') $metadataPath
     if ($LASTEXITCODE -ne 0) { throw 'Bootstrap compilation failed.' }
-    & $compiler /nologo /optimize+ /target:exe /platform:anycpu "/out:$buildTemp\CoopUpdater.exe" /r:System.Web.Extensions.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll (Join-Path $PSScriptRoot 'Engine.cs') (Join-Path $PSScriptRoot 'Program.cs')
+    & $compiler /nologo /optimize+ /target:exe /platform:anycpu "/out:$buildTemp\CoopUpdater.exe" "/win32icon:$icon" /r:System.Web.Extensions.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll (Join-Path $PSScriptRoot 'Engine.cs') (Join-Path $PSScriptRoot 'Program.cs') (Join-Path $PSScriptRoot 'NoitaDetection.cs') (Join-Path $PSScriptRoot 'Setup.cs') (Join-Path $PSScriptRoot 'ProxyHandoff.cs') $metadataPath
     if ($LASTEXITCODE -ne 0) { throw 'Updater compilation failed.' }
     & python (Join-Path $PSScriptRoot 'release_builder.py') --source-revision $SourceRevision --version $Version --build $Build --output $OutputDirectory --baseline $BaselineArchive --runtime-source $RuntimeSource --bootstrap (Join-Path $buildTemp 'CoopPlus.exe') --updater (Join-Path $buildTemp 'CoopUpdater.exe') --repository $Repository
     if ($LASTEXITCODE -ne 0) { throw 'Release packaging or verification failed.' }

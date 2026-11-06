@@ -1,6 +1,7 @@
 # Co-op+ updater candidate
 
-Windows 11; bootstrap protocol 1; complete ZIP releases. The initial mod payload is
+Windows 11; bootstrap protocol 1; complete ZIP releases. Build 2 is a draft
+usability candidate; published build 1 remains Latest until separate approval. The initial mod payload is
 byte-identical to the frozen R14 playtest package. Official proxy v1.6.8 and its
 native components are unchanged. This candidate is for independent review.
 
@@ -11,29 +12,45 @@ native components are unchanged. This candidate is for independent review.
 2. Extract the entire **bootstrap-win.zip** to a permanent, user-writable folder,
    for example `%LOCALAPPDATA%\CoopPlus`. Keep it outside the game folder and all
    development checkouts. Do not extract only the EXE.
-3. Open `CoopPlus.exe`. Enter the folder containing your `noita.exe`. Press Enter
-   at the portable-proxy prompt to retain the official AppData settings/saves, or
-   enter the old proxy folder if it contains your portable `proxy.ron` and
-   `save_state`. No settings or saves are imported, reset or merged.
-4. Setup replaces `mods\quant.ew` completely, retaining its old contents at
-   `<Noita>\.coopplus-backups\<transaction>\quant.ew`, outside active mods.
-   Enable EW/unsafe mods in Noita as usual. Use this same `CoopPlus.exe` thereafter;
-   a desktop shortcut is sufficient. No Git, authentication, Python/Node,
-   developer tools or execution-policy changes are required on the friend's PC.
+3. Open `CoopPlus.exe`. A valid existing selection is reused. Otherwise Co-op+ reads
+   the selected proxy's remembered `paths.noita_exe` from RON and Steam app **881100**
+   manifests/library lists, including secondary libraries on other drives. Use a
+   detected installation, select another result, or Browse for `noita.exe`. Cancel
+   leaves configuration and installation unchanged. No drive scan or Steam launch.
+4. Existing settings/state paths remain selected. On first setup the official
+   AppData paths are used, or choose **Choose portable proxy…** for existing
+   `proxy.ron`/`save_state` beside an old proxy. Keep that folder in place; files
+   are referenced without importing/resetting them. Explicit shortcut path
+   overrides are read for discovery and forwarded without silently changing an
+   existing stored state selection.
+5. Optionally check **Create a Co-op+ desktop shortcut**. It targets this launcher,
+   uses the selected game's icon, and writes only after opt-in. An unavailable
+   configured game can be selected again; its complete managed mod is installed
+   into the replacement folder while external proxy state is retained.
+6. Setup replaces `mods\quant.ew` completely and keeps its prior contents outside
+   active mods at `<Noita>\.coopplus-backups\<transaction>\quant.ew`. Enable EW/unsafe
+   mods normally. Thereafter use the same launcher/shortcut. Your friend needs no
+   Git/authentication, Python/Node, developer tools or execution-policy changes.
 
 `CoopPlus.exe --coop-check` installs/checks without opening the proxy.
-`--coop-setup` selects the paths again. Other arguments are passed to the official
+`--coop-setup` selects the game/state paths again. `--coop-shortcut` offers the
+desktop shortcut separately; it does not launch the proxy. Other arguments are passed to the official
 proxy with Windows argument quoting, including explicit settings/save overrides.
 The proxy starts from `current\proxy`, with `NP_SKIP_MOD_CHECK=1` and the configured
-Noita executable. Keep the console open while the proxy is running. Use Co-op+ for
+Noita executable. The graphical proxy is handed off through a short-lived
+detached parent, so both updater and bootstrap exit while the proxy stays alive.
+A bounded startup check reports immediate failures. No terminal opened by the
+user is hidden or closed. Official `--host`, `--lobby`, `--help` and deliberate
+`--coop-console` usage keep attached console/wait behavior. Use Co-op+ for
 updates; the unchanged proxy's separate upstream update UI is outside this feed.
 
 Default mutable locations were checked against the pinned v1.6.8 proxy source:
 `%APPDATA%\quant\entangledworlds\config\proxy.ron` and
 `%APPDATA%\quant\entangledworlds\data\save_state`. Noita's saves/mod preferences
 remain in its ordinary profile. Explicit portable paths remain where selected.
-The updater records those paths in local `coopplus.json`; it does not read the
-settings content or upload it. Do not place mutable paths inside managed folders.
+The updater records those paths in local `coopplus.json`; discovery reads only
+the bounded remembered game-location metadata and never rewrites or uploads the
+proxy settings. Do not place mutable paths inside managed folders.
 
 ## Approval and update rules
 
@@ -84,12 +101,21 @@ migration guarantees. Matching R14 Continue behavior is unchanged, with the same
 host/identities/mode and paired saves expected. Shared-income OFF to ON still
 requires a new run. Both peers must use matching runtime files.
 
-The first release stays draft and is not marked latest. Disposable filesystem,
-fault, networking and dummy-launch tests are recorded in the review handoff. There
-is no normal-game installation, official proxy/game launch, gameplay/native recovery
-matrix, code signing, SmartScreen reputation, or anonymous published-download proof
-in this pass. Windows may show the normal unsigned-download prompt.
+Build 1 is published. Build 2 remains draft and does not replace Latest. The actual
+published-build-1 to next-published-build upgrade remains pending publication
+approval. Fixture compatibility with the unchanged build-1 bootstrap and managed
+updater replacement is tested separately. No gameplay/native recovery matrix or
+live game installation is performed for this usability candidate.
 
-Build/upload instructions: [PUBLICATION.md](PUBLICATION.md). Do not publish the
-first draft until independent review is complete; then verify the public feed and
-assets anonymously before treating automatic updates as enabled.
+Newly built bootstrap/updater EXEs use the existing upstream project icon and
+Co-op+ application metadata, retaining its MIT/Apache attribution. Protocol 1
+never replaces root `CoopPlus.exe`: existing EXE icons/file metadata do **not**
+change automatically. Once build 2 is approved/published, existing build-1 users
+receive discovery/setup, console title and clean graphical handoff through the
+managed updater, without manually replacing their launcher. `--coop-shortcut`
+provides the game's icon even with the original bootstrap. New bootstrap ZIPs get
+the embedded project icon; there is no new bootstrap replacement mechanism.
+
+Build/upload instructions: [PUBLICATION.md](PUBLICATION.md). Future uploads stay
+draft/`--latest=false` until separately approved. Ordinary commits do not distribute
+updates. File-update compatibility is separate from saved-run compatibility.

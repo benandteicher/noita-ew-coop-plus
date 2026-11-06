@@ -23,6 +23,7 @@ namespace CoopPlus {
             try {
                 Console.InputEncoding = new UTF8Encoding(false);
                 Console.OutputEncoding = new UTF8Encoding(false);
+                Console.Title = "Co-op+";
                 string root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
                 Guard(root);
                 string key;
@@ -30,7 +31,7 @@ namespace CoopPlus {
                 using (var gate = new Mutex(false, "Local\\CoopPlus-Bootstrap-" + key)) {
                     bool locked;
                     try { locked = gate.WaitOne(0); } catch (AbandonedMutexException) { locked = true; }
-                    if (!locked) { Console.Error.WriteLine("Co-op+ is already open for this installation."); return 3; }
+                    if (!locked) { Console.Error.WriteLine("Co-op+ is already open for this installation."); return Finish(3); }
                     string lockPath = Path.Combine(root, ".coopplus-launch.lock"); Guard(lockPath);
                     try { using (var fileGate = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
                         for (int attempt = 0; attempt < 3; attempt++) {

@@ -1,0 +1,31 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using System.Web.Script.Serialization;
+using CoopPlus;
+class SetupTests {
+    static int count; static string baseDir;
+    static void Assert(bool b,string s) { if(!b)throw new Exception(s); }
+    static void Case(string name,Action a) { a(); count++; Console.WriteLine("PASS "+name); }
+    static string Dir(string name) {string p=Path.Combine(baseDir,name);Directory.CreateDirectory(p);return p;}
+    static string Game(string name) {string p=Dir(name);File.WriteAllText(Path.Combine(p,"noita.exe"),"not executable");return p;}
+    static void Save(string root,UserConfig c) {File.WriteAllText(Path.Combine(root,"coopplus.json"),new JavaScriptSerializer().Serialize(c),new UTF8Encoding(false));}
+    static UserConfig Config(string game) {string p=Dir("state-"+Guid.NewGuid().ToString("N"));File.WriteAllText(Path.Combine(p,"proxy.ron"),"sentinel");return new UserConfig{gameDir=game,settingsPath=Path.Combine(p,"proxy.ron"),saveStatePath=Path.Combine(p,"save_state")};}
+    [STAThread]
+    static void Main() {
+        baseDir=Path.Combine(Path.GetTempPath(),"CoopPlus setup tests "+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(baseDir);
+        try {
+            Case("valid existing configuration is retained without prompt or writes",()=>{var root=Dir("valid root");var c=Config(Game("Noita Ω 漢"));Save(root,c);string before=File.ReadAllText(Path.Combine(root,"coopplus.json"));Setup.Select=r=>{throw new Exception("unexpected prompt");};Setup.Discover=(r,s)=>{throw new Exception("unexpected discovery");};Assert(Setup.Load(root,false,new string[0]).gameDir==c.gameDir,"selection changed");Assert(File.ReadAllText(Path.Combine(root,"coopplus.json"))==before,"config changed");});
+            Case("unavailable game rediscovers while retaining portable state",()=>{var root=Dir("stale root");var c=Config(Path.Combine(baseDir,"missing"));Save(root,c);string next=Game("replacement game");Setup.Discover=(r,s)=>{Assert(s==c.settingsPath,"wrong settings");return new List<InstallationCandidate>{new InstallationCandidate{GameDirectory=next,Source="fixture"}};};Setup.Select=r=>new SetupSelection{Config=new UserConfig{gameDir=next,settingsPath=r.Config.settingsPath,saveStatePath=r.Config.saveStatePath}};var selected=Setup.Load(root,false,new string[0]);Assert(selected.settingsPath==c.settingsPath&&selected.saveStatePath==c.saveStatePath,"state switched");Assert(File.ReadAllText(c.settingsPath)=="sentinel","settings rewritten");});
+            Case("picker cancellation keeps existing config and installation unchanged",()=>{var root=Dir("cancel stale");var c=Config(Path.Combine(baseDir,"gone"));Save(root,c);string old=File.ReadAllText(Path.Combine(root,"coopplus.json"));Setup.Discover=(r,s)=>new List<InstallationCandidate>();Setup.Select=r=>null;bool cancelled=false;try{Setup.Load(root,false,new string[0]);}catch(OperationCanceledException){cancelled=true;}Assert(cancelled,"cancel missing");Assert(File.ReadAllText(Path.Combine(root,"coopplus.json"))==old&&!Directory.Exists(Path.Combine(root,"current")),"cancel mutated install");});
+            Case("first setup cancellation creates no config",()=>{var root=Dir("cancel first");Setup.Discover=(r,s)=>new List<InstallationCandidate>();Setup.Select=r=>null;try{Setup.Load(root,false,new string[0]);}catch(OperationCanceledException){}Assert(!File.Exists(Path.Combine(root,"coopplus.json")),"config created");});
+            Case("first setup honors explicit state path before discovery",()=>{var root=Dir("custom first");var c=Config(Game("custom game"));Setup.Discover=(r,s)=>{Assert(s==c.settingsPath,"explicit settings ignored");return new List<InstallationCandidate>();};Setup.Select=r=>new SetupSelection{Config=new UserConfig{gameDir=c.gameDir,settingsPath=r.Config.settingsPath,saveStatePath=r.Config.saveStatePath}};var selected=Setup.Load(root,false,new[]{"--settings-path="+c.settingsPath,"--save-state-path",c.saveStatePath});Assert(selected.saveStatePath==c.saveStatePath,"save override lost");});
+            Case("cancelled selection cannot write source checkout paths",()=>{var root=Dir("unsafe root");var game=Game("source game");Directory.CreateDirectory(Path.Combine(game,".git"));var c=Config(game);Setup.Discover=(r,s)=>new List<InstallationCandidate>();Setup.Select=r=>new SetupSelection{Config=c};bool rejected=false;try{Setup.Load(root,false,new string[0]);}catch(IOException){rejected=true;}Assert(rejected&&!File.Exists(Path.Combine(root,"coopplus.json")),"unsafe selection accepted");});
+            Case("opt-in shortcut created only in disposable desktop with correct target icon",()=>{var root=Dir("shortcut launcher");var game=Game("shortcut game");var desktop=Dir("fake Desktop");File.WriteAllText(Path.Combine(root,"CoopPlus.exe"),"fixture");Setup.CreateShortcut(root,game,desktop);Assert(File.Exists(Path.Combine(desktop,"Co-op+.lnk")),"shortcut missing");});
+            Case("official console modes and GUI mode remain distinct",()=>{Assert(Program.ConsoleMode(new[]{"--host","steam"}),"host");Assert(Program.ConsoleMode(new[]{"--lobby=x"}),"lobby");Assert(Program.ConsoleMode(new[]{"--help"}),"help");Assert(!Program.ConsoleMode(new[]{"--language","en"}),"GUI");});
+            Case("stale selection discovers from effective override without changing stored state",()=>{var root=Dir("override stale");var c=Config(Path.Combine(baseDir,"old missing"));var actual=Config(Game("override replacement"));Save(root,c);Setup.Discover=(r,s)=>{Assert(s==actual.settingsPath,"effective path ignored");return new List<InstallationCandidate>();};Setup.Select=r=>new SetupSelection{Config=new UserConfig{gameDir=actual.gameDir,settingsPath=r.Config.settingsPath,saveStatePath=r.Config.saveStatePath}};var chosen=Setup.Load(root,false,new[]{"--settings-path",actual.settingsPath});Assert(chosen.settingsPath==c.settingsPath&&chosen.saveStatePath==c.saveStatePath,"stored state switched");Assert(chosen.pendingInstall,"retarget installation not persisted");});
+            Console.WriteLine("RESULT: "+count+" focused setup cases passed; no live state/desktop changes.");
+        } finally {if(Directory.Exists(baseDir))Directory.Delete(baseDir,true);}
+    }
+}

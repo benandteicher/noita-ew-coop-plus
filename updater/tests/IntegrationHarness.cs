@@ -5,6 +5,7 @@ using System.Net;
 using CoopPlus;
 class IntegrationHarness {
     static int Main(string[] a) {
+        if (a.Length == 2 && a[0] == "--internal-handoff") return ProxyHandoff.Worker(a[1]);
         try {
             ServicePointManager.ServerCertificateValidationCallback = (s,c,ch,e) => true;
             if (a[0] == "feed") {

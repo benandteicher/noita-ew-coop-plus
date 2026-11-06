@@ -161,6 +161,8 @@ def build(args) -> dict:
         "modFileCount": len(mod_entries), "modSha256": mod_entries,
         "runtimeIdenticalToR14": mod_entries == baseline_mod,
         "bootstrapSha256": sha(pathlib.Path(args.bootstrap).read_bytes()),
+        "bootstrapProtocol": 1,
+        "bootstrapReplacement": "Protocol 1 updates the managed updater, not root CoopPlus.exe. New bootstrap builds have the embedded project icon/metadata; existing clients get managed usability changes after approval and can opt into a game-icon desktop shortcut.",
         "updaterSha256": sha(entries["updater/CoopUpdater.exe"]),
         "updaterSourceSha256": {p.name: sha(p.read_bytes()) for p in sorted((ROOT / "updater").glob("*.cs"))},
         "packageSha256": sha(package_bytes), "releaseMetadataSha256": sha(manifest_raw),
@@ -176,7 +178,10 @@ def build(args) -> dict:
         "Co-op+ updater candidate -- draft review build\r\n\r\n"
         "Extract this entire archive to a permanent user-writable folder outside Noita, mods, and any source checkout.\r\n"
         "Close Noita and all official proxies before setup or updates. Open CoopPlus.exe for setup.\r\n"
-        "Choose your Noita game folder when asked; the existing mods/quant.ew is backed up outside active mods.\r\n"
+        "Co-op+ detects Noita from remembered proxy settings and Steam libraries. Use the detected folder or Browse for noita.exe. Cancel makes no installation changes.\r\n"
+        "Existing valid selections and proxy settings/state are retained. Choose portable proxy if using proxy.ron/save_state beside the old proxy.\r\n"
+        "Optionally create the Co-op+ desktop shortcut, or run CoopPlus.exe --coop-shortcut later.\r\n"
+        "The existing mods/quant.ew is backed up outside active mods. The launcher closes after opening the graphical proxy; CLI modes keep console behavior.\r\n"
         "Settings/saves remain in the official proxy/game profile locations. Do not move them into managed mod/proxy folders.\r\n"
         "Review updater/README.md in the source repository for candidate limitations and setup command options.\r\n"
         "This bundle includes the complete R14 payload. Draft assets are not an anonymous public update feed.\r\n"
@@ -184,7 +189,7 @@ def build(args) -> dict:
     bootstrap_name = f"Co-op-Plus-{args.version}-build{args.build}-bootstrap-win.zip"
     write_zip(output / bootstrap_name, bootstrap_entries)
     notes = (
-        f"Co-op+ {args.version}, build {args.build}: first updater candidate.\n\n"
+        f"Co-op+ {args.version}, build {args.build}: Windows updater candidate.\n\n"
         f"Source: `{args.source_revision}`. Official proxy remains v{OFFICIAL_VERSION}. "
         f"The complete mod payload {'is byte-identical to frozen R14' if provenance['runtimeIdenticalToR14'] else 'uses the explicitly approved checkout source'}.\n\n"
         "DRAFT for independent review. Do not publish or mark latest until approved. "
