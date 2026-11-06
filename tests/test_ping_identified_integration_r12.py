@@ -20,8 +20,8 @@ end
 class IdentifiedIntegrationTests(unittest.TestCase):
  def test_final_capture_uses_current_view_without_retargeting_queued_world_intent(self):
   h=integration.PingIntegrationTests();p=h.peers(SOURCE+'''
-  local I=dofile_once('mods/quant.ew/files/system/player_ping/identification.lua')
-  I.target=function(x,y,v)last_target_view=v.camera_x;last_target_x=x;return nil end
+  local T=dofile_once('mods/quant.ew/files/system/player_ping/world_target.lua')
+  T.target=function(x,y,v)last_target_view=v.camera_x;last_target_x=x;return nil end
   ''')
   p.a.execute('frame=frame+1;ping_pressed=true;ping.on_world_update();GameGetCameraPos=function()return 1000,0 end;ping.on_world_update_post()');p.flush()
   self.assertEqual(p.a.eval('last_target_view'),1000)
@@ -31,9 +31,9 @@ class IdentifiedIntegrationTests(unittest.TestCase):
  def test_two_peer_capture_refresh_upgrade_cancel_and_unknown_fallback(self):
   h=integration.PingIntegrationTests();p=h.peers(SOURCE+'''
   ident_target=50
-  local I=dofile_once('mods/quant.ew/files/system/player_ping/identification.lua')
-  I.target=function(x,y,v)if ident_target then return ident_target,x,y,{v=1,category='spell',id='BOMB'}end end
-  I.capture=function(e,v)if e==ident_target then return cursor_x,cursor_y,{v=1,category='spell',id='BOMB'}end end
+  local T=dofile_once('mods/quant.ew/files/system/player_ping/world_target.lua')
+  T.target=function(x,y,v)if ident_target then return {entity=ident_target,x=x,y=y,kind='spell',ident={v=1,category='spell',id='BOMB'}}end end
+  T.revalidate=function(s,x,y,v)if s.entity==ident_target then return s end end
   ''')
   h.press(p)
   for l in p.peers.values():

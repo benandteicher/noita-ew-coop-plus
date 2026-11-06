@@ -15,7 +15,7 @@ function EntityGetAllChildren(e)return entities[e].children or{}end
 wand_ids={}
 function EntityGetInRadiusWithTag()return wand_ids end
 function new_wand(e,x,y,name)
- entities[e]={alive=true,x=x,y=y,tags={wand=true},c={SpriteComponent={},ItemComponent={is_pickable=true,item_name=name},AbilityComponent={use_gun_script=true,mana_max=100,mana=80,mana_charge_speed=20,sprite_file='data/items_gfx/handgun.png',gun_config={shuffle_deck_when_empty=false,actions_per_round=1,reload_time=30,deck_capacity=2},gunaction_config={fire_rate_wait=12,spread_degrees=1.25,speed_multiplier=.982264}}}}
+ entities[e]={alive=true,x=x,y=y,tags={wand=true},c={SpriteComponent={image_file='data/items_gfx/handgun.png',alpha=1,visible=true,offset_x=0,offset_y=0,update_transform=true,update_transform_rotation=true},ItemComponent={is_pickable=true,item_name=name},AbilityComponent={use_gun_script=true,mana_max=100,mana=80,mana_charge_speed=20,sprite_file='data/items_gfx/handgun.png',gun_config={shuffle_deck_when_empty=false,actions_per_round=1,reload_time=30,deck_capacity=2},gunaction_config={fire_rate_wait=12,spread_degrees=1.25,speed_multiplier=.982264}}}}
 end
 hover_item,hover_mx,hover_my=0,40,40
 local inventory_pending
@@ -71,11 +71,13 @@ class PingIntegrationTests(unittest.TestCase):
   p=self.peers();self.press(p);self.step(p,10);self.press(p);self.press(p)
   for l in p.peers.values():
    self.assertEqual(l.eval('#ping_records()'),1);self.assertEqual(l.eval('ping_records()[1].kind'),'danger');self.assertEqual(l.eval('ping_records()[1].seq'),2)
-   self.assertEqual(l.eval('calls.ping_cues'),1)
+  self.assertIsNone(p.a.eval('calls.ping_cues'))
+  self.assertEqual(p.b.eval('calls.ping_cues'),1)
   self.step(p,25);p.a.execute('cursor_x=35');self.press(p)
   self.assertEqual(p.a.eval('#ping_records()'),1);self.assertEqual(p.a.eval('ping_records()[1].kind'),'location')
   self.assertEqual(p.a.eval('ping_records()[1].id'),2);self.assertEqual(p.a.eval('ping_records()[1].target'),1)
-  self.assertEqual(p.a.eval('calls.ping_cues'),2)
+  self.assertIsNone(p.a.eval('calls.ping_cues'))
+  self.assertEqual(p.b.eval('calls.ping_cues'),2)
  def test_migration_preserves_custom_and_world_target_is_deterministic_visible_unowned(self):
   p=self.peers();self.assertEqual(p.a.eval("settings['quant.ew.ping_life']"),'30.0')
   p.a.execute("new_wand(51,20,20,'high');new_wand(50,20,20,'low');wand_ids={51,50}")
@@ -85,7 +87,7 @@ class PingIntegrationTests(unittest.TestCase):
    self.assertAlmostEqual(l.eval('ping_records()[1].wand.props.speedMultiplier'),.982264)
   q=self.peers("settings['quant.ew.ping_life']='45'")
   self.assertEqual(q.a.eval("settings['quant.ew.ping_life']"),'45')
-  for change in ('entities[50].parent=100','entities[50].c.SpriteComponent._enabled=false','entities[50].c.ItemComponent._enabled=false','RaytraceSurfaces=function()return true end','loaded=false','entities[50].x=300'):
+  for change in ('entities[50].parent=100','entities[50].c.SpriteComponent._enabled=false','entities[50].c.ItemComponent._enabled=false','loaded=false','entities[50].x=400'):
    r=self.peers();r.a.execute("new_wand(50,20,20,'hidden');wand_ids={50};"+change);self.press(r)
    self.assertEqual(r.a.eval('ping_records()[1].kind'),'location',change)
  def test_menus_focus_inventory_and_return_guard_block_without_control_mutation(self):
@@ -145,7 +147,8 @@ class PingIntegrationTests(unittest.TestCase):
   p=self.peers();p.a.execute('frame=10000');p.b.execute('frame=10000');self.press(p)
   p.a.execute("local r=ping_records()[1];old={v=1,run=ping_state().run,epoch=r.epoch,id=r.id,seq=99,kind='location',x=1,y=1}")
   p.a.execute('frame=0');p.b.execute('frame=0');self.step(p);self.press(p)
-  self.assertEqual(p.a.eval('calls.ping_cues'),2)
+  self.assertIsNone(p.a.eval('calls.ping_cues'))
+  self.assertEqual(p.b.eval('calls.ping_cues'),2)
   p.a.execute("receive('A','ping',encode({old}))")
   self.assertEqual(p.a.eval('#ping_records()'),1)
  def test_rpc_before_world_update_cannot_consume_rollback_reset(self):

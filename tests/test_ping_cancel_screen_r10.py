@@ -40,14 +40,14 @@ class CancelScreenTests(unittest.TestCase):
   assert(d.action=='create') -- Never invent a visual position from old world data.
   g.clear(history);assert(at(102,100,0,200,150).action=='create')
   ''')
- def test_input_is_frozen_and_ownership_precedes_burst_guard(self):
+ def test_input_is_frozen_and_cancel_burst_precedes_an_overlapping_foreign_marker(self):
   self.runtime().execute('''
   local original=cancelled.input;original.x=999
   assert(history.last.input.x==200)
   local foreign={sender='B',id=1,epoch=1,key='B:1:1',kind='location',created=0}
   local d=at(101,110,0,200,150,'mouse',foreign)
-  assert(d.reason=='foreign marker'and not g.commit(history,d))
-  assert(history.last.at==100)
+  assert(d.reason=='cancel burst'and g.commit(history,d))
+  assert(history.last.at==101 and history.last.action=='cancel')
   ''')
  def test_controller_uses_visual_aim_and_fresh_danger_remains_world_based(self):
   self.runtime().execute('''

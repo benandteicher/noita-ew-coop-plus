@@ -31,6 +31,7 @@ def runtime():
     function publish(d)
       local r
       if d.action=='cancel'then assert(m.cancel(s,'A',d.record.epoch,d.record.id));assert(g.commit(history,d));return end
+      if d.action=='hide'then assert(m.hide(s,d.record.key));assert(g.commit(history,d));return end
       assert(d.action~='blocked')
       if d.action=='upgrade'then
         local p=packet(d.record.id,'danger',d.x,d.y,d.record.target,'world',1800)
@@ -145,9 +146,9 @@ class PingUsabilityLifecycleTests(unittest.TestCase):
         assert(classify(120,10,0).action=='create')
         local foreign={sender='B',id=55,key='B:1:55',created=0,x=0,y=0,kind='location'}
         local d=classify(125,0,0,'location',nil,foreign)
-        assert(d.reason=='foreign marker'and not g.commit(history,d)and history.last.at==119)
+        assert(d.reason=='cancel burst'and g.commit(history,d)and history.last.at==125)
         assert(not g.commit(history,{action='blocked',reason='invalid intent',now=126,x=0,y=0}))
-        assert(classify(138,0,0).action=='create')
+        assert(classify(144,0,0).action=='create')
         ''')
 
     def test_quick_different_location_is_new_even_inside_near_refresh_radius(self):
@@ -171,12 +172,14 @@ class PingUsabilityLifecycleTests(unittest.TestCase):
         assert(classify(35,100,0,'wand','wand:10').action=='blocked')
         ''')
 
-    def test_own_established_core_cancels_foreign_core_blocks_and_cancel_burst_stays_quiet(self):
+    def test_own_established_core_cancels_foreign_core_hides_and_cancel_burst_stays_quiet(self):
         runtime().execute('''
         local own=publish(classify(0,0,0))
         local foreign=assert(m.accept(s,'B',packet(1),1))
-        local blocked=classify(100,0,0,'location',nil,foreign)
-        assert(blocked.action=='blocked'and blocked.reason=='foreign marker')
+        local hidden=classify(100,0,0,'location',nil,foreign)
+        assert(hidden.action=='hide');publish(hidden)
+        assert(s.records[foreign.key].hidden and #m.list(s)==1)
+        g.clear(history)
         local cancel=classify(100,0,0,'location',nil,own);assert(cancel.action=='cancel');publish(cancel)
         assert(not s.records[own.key]and s.records[foreign.key])
         assert(classify(118,3,0).action=='blocked')

@@ -18,14 +18,20 @@ class IdentificationTests(unittest.TestCase):
         function EntityGetTransform(e)return entities[e].x,entities[e].y,0 end
         function RaytraceSurfaces(ox,oy,x,y)last_sight={x,y};return y>=20 end
         local x,y,i=M.capture(1,V);assert(x==10 and y==20 and i.id=='BOMB')
-        assert(last_sight[1]==10 and last_sight[2]==11 and ent.components.ItemCostComponent[1].cost==120)
-        ent.components.SpriteComponent[1].offset_y=8;assert(M.capture(1,V)==nil)
+        assert(last_sight==nil and ent.components.ItemCostComponent[1].cost==120)
+        ent.components.SpriteComponent[1].offset_y=8;assert(M.capture(1,V))
         ''')
 
     def runtime(self):
         lua=LuaRuntime(unpack_returned_tuples=True)
         lua.globals().SOURCE=MODULE.read_text(encoding='utf-8')
+        lua.globals().READ_MODULE=lambda p:(ROOT/p.removeprefix('mods/')).read_text(encoding='utf-8-sig')
         lua.execute('''
+        modules={}
+        function dofile_once(p)
+          if not modules[p]then modules[p]=assert(loadstring(READ_MODULE(p),'@'..p))()end
+          return modules[p]
+        end
         entities={};ids={};loaded=true;blocked=false;ctx={players={}}
         function forbidden()error('world mutation/action invocation forbidden')end
         EntityLoad=forbidden;EntityCreateNew=forbidden;EntityKill=forbidden
@@ -47,7 +53,10 @@ class IdentificationTests(unittest.TestCase):
         },{
           id="BAD_NAME",name="raw_filename.xml",sprite="data/ui_gfx/gun_actions/bomb.png",action=function()end,
         }}]=]
-        function ModTextFileGetContent(p)assert(p=='data/scripts/gun/gun_actions.lua');return source end
+        function ModTextFileGetContent(p)
+          if p=='data/scripts/gun/gun_actions.lua'then return source end
+          return '<Sprite default_animation="default"><RectAnimation name="default" frame_width="20" frame_height="20"></RectAnimation></Sprite>'
+        end
         missing_asset=nil
         function ModDoesFileExist(p)return p~=missing_asset and p:sub(1,5)=='data/'and not p:find('missing',1,true)end
         function GameTextGetTranslatedOrNot(k)
@@ -66,13 +75,13 @@ class IdentificationTests(unittest.TestCase):
           local c=EntityGetComponentIncludingDisabled(e,k);return c and c[1]end
         function ComponentGetIsEnabled(c)return c.enabled~=false end
         function ComponentGetValue2(c,k)return c[k]end
-        function EntityGetInRadius(x,y,r)assert(r==12);return ids end
+        function EntityGetInRadius(x,y,r)assert(r>100);return ids end
         function DoesWorldExistAt()return loaded end
         function RaytraceSurfaces()return blocked end
         V={camera_x=0,camera_y=0,world_w=200,world_h=100,origin_x=0,origin_y=0}
         function add(e,x,y,path,name,tags)
           local ent={x=x,y=y,path=path,name=name,tags=tags or {},components={}}
-          ent.components.SpriteComponent={{image_file='data/visual.png',alpha=1}}
+          ent.components.SpriteComponent={{image_file='data/ui_gfx/gun_actions/bomb.png',alpha=1,offset_x=8,offset_y=8}}
           entities[e]=ent;return ent
         end
         function card(e,x,y,id)
@@ -87,7 +96,7 @@ class IdentificationTests(unittest.TestCase):
           ent.components.ItemComponent={{is_pickable=true,item_name=name}}
           if physical then
             ent.components.SpriteComponent={{enabled=false,image_file='data/hidden.png'}}
-            ent.components.PhysicsImageShapeComponent={{image_file='data/body.png'}}
+            ent.components.PhysicsImageShapeComponent={{image_file='data/items_gfx/potion_normals.png',centered=true}}
           end
           return ent
         end
@@ -97,7 +106,7 @@ class IdentificationTests(unittest.TestCase):
           ent.components.DamageModelComponent={{}}
           return ent
         end
-        M=assert(loadstring(SOURCE,'@identification.lua'))()
+        M=dofile_once('mods/quant.ew/files/system/player_ping/identification.lua')
         ''')
         return lua
 
@@ -132,6 +141,17 @@ class IdentificationTests(unittest.TestCase):
         assert(M.resolve({v=1,category='spell',id='LIGHT_BULLET'})==nil)
         ''')
 
+    def test_native_empty_translation_uses_local_fallback_including_tablet(self):
+        self.runtime().execute('''
+        GameTextGetTranslatedOrNot=function()return '' end
+        local tablet=assert(M.resolve({v=1,category='item',id='tablet'}))
+        assert(tablet.name=='Emerald tablet'and tablet.icon=='data/ui_gfx/items/emerald_tablet.png')
+        assert(M.resolve({v=1,category='item',id='potion'}).name=='Potion')
+        assert(M.resolve({v=1,category='enemy',id='zombie'}).name~='')
+        -- Unknown spell translations still fail closed; no fabricated spell name.
+        assert(M.resolve({v=1,category='spell',id='LIGHT_BULLET'})==nil)
+        ''')
+
     def test_loose_shop_spells_and_last_moment_revalidation_are_read_only(self):
         self.runtime().execute('''
         local ent=card(1,2,3);ent.components.ItemCostComponent={{cost=120}};ids={1}
@@ -142,7 +162,7 @@ class IdentificationTests(unittest.TestCase):
         assert(x2==2 and y2==3 and copy~=ident and copy.id==ident.id)
         ent.dead=true;assert(M.capture(1,V)==nil and M.target(2,3,V)==nil)
         ent.dead=false;ent.root=99;assert(M.capture(1,V)==nil)
-        ent.root=nil;ent.components.ItemActionComponent[1].enabled=false;assert(M.capture(1,V)==nil)
+        ent.root=nil;ent.components.ItemActionComponent[1].enabled=false;assert(M.capture(1,V))
         ent.components.ItemActionComponent[1].enabled=true
         ent.components.ItemActionComponent[1].action_id='UNKNOWN'
         assert(M.capture(1,V)==nil)
@@ -162,9 +182,9 @@ class IdentificationTests(unittest.TestCase):
         p.path='mods/other/potion_water.xml';assert(M.capture(1,V)==nil)
         p.path='data/entities/items/pickup/potion_mimic.xml';assert(M.capture(1,V)==nil)
         p.path='data/entities/items/pickup/potion_water.xml';p.components.PotionComponent=nil
-        assert(M.capture(1,V)==nil)
+        assert(M.capture(1,V)) -- classification does not depend on one implementation component
         c.components.ItemComponent[1].item_name='$item_potion';assert(M.capture(2,V)==nil)
-        entities[4].components.ProjectileComponent={{}};assert(M.capture(4,V)==nil)
+        entities[4].components.ProjectileComponent={{}};assert(M.capture(4,V))
         ''')
 
     def test_real_enemy_disabled_ai_supported_but_players_and_decorative_fakes_not(self):
@@ -179,18 +199,18 @@ class IdentificationTests(unittest.TestCase):
           e.tags[tag]=true;assert(M.capture(1,V)==nil);e.tags[tag]=nil
         end
         ctx.players={peer={entity=1}};assert(M.capture(1,V)==nil);ctx.players={}
-        e.components.AnimalAIComponent=nil;assert(M.capture(1,V)==nil)
+        e.components.AnimalAIComponent=nil;assert(M.capture(1,V)) -- ordinary remote reconstruction
         e.components.AnimalAIComponent={{}};e.tags.enemy=nil;assert(M.capture(1,V)==nil)
         e.tags.enemy=true;e.name='decoration';assert(M.capture(1,V)==nil)
-        e.name='$animal_zombie';e.path='data/entities/animals/zombie_weak.xml';assert(M.capture(1,V)==nil)
+        e.name='$animal_zombie';e.path='mods/enemies/zombie.xml';assert(M.capture(1,V)==nil)
         ''')
 
     def test_loaded_visible_current_view_line_of_sight_and_missing_apis_fail_closed(self):
         self.runtime().execute('''
         local ent=card(1,0,0);assert(M.capture(1,V))
-        blocked=true;assert(M.capture(1,V)==nil);blocked=false
+        blocked=true;assert(M.capture(1,V));blocked=false
         loaded=false;assert(M.capture(1,V)==nil);loaded=true
-        ent.x=101;assert(M.capture(1,V)==nil);ent.x=0
+        ent.x=110;assert(M.capture(1,V)==nil);ent.x=0
         ent.y=-51;assert(M.capture(1,V)==nil);ent.y=0
         ent.components.SpriteComponent[1].alpha=0;assert(M.capture(1,V)==nil)
         ent.components.SpriteComponent[1].alpha=1
@@ -199,24 +219,23 @@ class IdentificationTests(unittest.TestCase):
         assert(M.capture(1,V))
         ent.components.SpriteComponent[2].visible=false;assert(M.capture(1,V)==nil)
         ent.components.SpriteComponent[2].visible=true
-        ent.components.SpriteComponent[2].has_special_scale=true;assert(M.capture(1,V)==nil)
+        ent.components.SpriteComponent[2].has_special_scale=true;assert(M.capture(1,V))
         ent.components.SpriteComponent[2].has_special_scale=false
-        EntityGetTransform=function()return 0,0,0,2,1 end;assert(M.capture(1,V)==nil)
+        EntityGetTransform=function()return 0,0,0,2,1 end;assert(M.capture(1,V))
         EntityGetTransform=function()return 0,0,0,1,1 end
-        RaytraceSurfaces=nil;assert(M.capture(1,V)==nil)
+        RaytraceSurfaces=nil;assert(M.capture(1,V))
         EntityGetInRadius=nil;assert(M.target(0,0,V)==nil)
         assert(M.capture(1,{camera_x=0/0})==nil and M.target(0/0,0,V)==nil)
         ''')
 
-    def test_nearest_confident_tie_and_flood_fallback_order_independent(self):
+    def test_direct_bounds_stable_ties_and_bounded_camera_search(self):
         self.runtime().execute('''
         card(1,2,0);card(2,2.5,0,'BOMB');ids={1,2}
-        assert(M.target(0,0,V)==nil);ids={2,1};assert(M.target(0,0,V)==nil)
-        entities[2].x=4;assert(M.target(0,0,V)==1)
-        ids={1,1};assert(M.target(0,0,V)==1)
-        entities[1].x=12.1;ids={1};assert(M.target(0,0,V)==nil)
-        entities[1].x=12;assert(M.target(0,0,V)==1)
-        for i=1,65 do ids[i]=i end;assert(M.target(0,0,V)==nil)
+        assert(M.target(2,-8,V)==1);ids={2,1};assert(M.target(2,-8,V)==1)
+        ids={1,1};assert(M.target(2,-8,V)==1)
+        entities[1].x=19;ids={1};assert(M.target(0,-8,V)==nil)
+        entities[1].x=12;assert(M.target(4,-8,V)==1)
+        ids={};for i=1,2049 do ids[i]=1 end;assert(M.target(0,-8,V)==nil)
         ''')
 
     def test_missing_or_oversized_local_registry_does_not_accept_unknown_spell(self):

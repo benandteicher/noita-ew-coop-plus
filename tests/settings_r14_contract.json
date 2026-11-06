@@ -1,0 +1,394 @@
+{
+  "shared_income": {
+    "value_default": false,
+    "id": "shared_income",
+    "scope": 0
+  },
+  "income_notices": {
+    "value_default": true,
+    "id": "income_notices",
+    "scope": 2
+  },
+  "shop_hover": {
+    "value_default": false,
+    "id": "shop_hover",
+    "scope": 2
+  },
+  "coop_marker_opacity": {
+    "value_min": 0,
+    "value_max": 100,
+    "value_display_multiplier": 1,
+    "scope": 2,
+    "value_default": 50,
+    "id": "coop_marker_opacity",
+    "value_display_formatting": " $0%"
+  },
+  "coop_death_sound": {
+    "value_default": true,
+    "id": "coop_death_sound",
+    "scope": 2
+  },
+  "coop_revive_effects": {
+    "value_default": true,
+    "id": "coop_revive_effects",
+    "scope": 2
+  },
+  "coop_ritual_numeric": {
+    "value_default": false,
+    "id": "coop_ritual_numeric",
+    "scope": 2
+  },
+  "coop_ritual_sound": {
+    "value_default": true,
+    "id": "coop_ritual_sound",
+    "scope": 2
+  },
+  "coop_panel_opacity": {
+    "value_min": 0,
+    "value_max": 100,
+    "value_display_multiplier": 1,
+    "scope": 2,
+    "value_default": 75,
+    "id": "coop_panel_opacity",
+    "value_display_formatting": " $0%"
+  },
+  "coop_statue_percent": {
+    "scope": 2,
+    "value_min": 1,
+    "value_default": 30,
+    "id": "coop_statue_percent",
+    "value_display_formatting": " $0%",
+    "value_display_multiplier": 1,
+    "value_max": 100
+  },
+  "coop_mountain_percent": {
+    "value_min": 1,
+    "value_max": 100,
+    "value_display_formatting": " $0%",
+    "value_default": 30,
+    "id": "coop_mountain_percent",
+    "scope": 2,
+    "value_display_multiplier": 1
+  },
+  "coop_manual": {
+    "value_default": false,
+    "id": "coop_manual",
+    "scope": 2
+  },
+  "coop_offer_return": {
+    "value_default": false,
+    "id": "coop_offer_return",
+    "scope": 2
+  },
+  "coop_return_limit": {
+    "value_default": "1",
+    "id": "coop_return_limit",
+    "scope": 2,
+    "values": {
+      "1": {
+        "1": "1",
+        "2": "1"
+      },
+      "2": {
+        "1": "2",
+        "2": "2"
+      },
+      "3": {
+        "1": "3",
+        "2": "3"
+      },
+      "4": {
+        "1": "5",
+        "2": "5"
+      },
+      "5": {
+        "1": "unlimited",
+        "2": "Unlimited"
+      }
+    }
+  },
+  "coop_enabled": {
+    "value_default": false,
+    "id": "coop_enabled",
+    "scope": 0
+  },
+  "coop_statue": {
+    "id": "coop_statue",
+    "scope": 0,
+    "value_default": true
+  },
+  "coop_seconds": {
+    "scope": 0,
+    "value_min": 1,
+    "value_default": 5,
+    "id": "coop_seconds",
+    "value_display_formatting": " $0 seconds",
+    "value_display_multiplier": 1,
+    "value_max": 120
+  },
+  "coop_allowance": {
+    "value_default": "unlimited",
+    "id": "coop_allowance",
+    "scope": 0,
+    "values": {
+      "1": {
+        "1": "unlimited",
+        "2": "Unlimited"
+      },
+      "2": {
+        "1": "run",
+        "2": "Per player per run"
+      },
+      "3": {
+        "1": "stage",
+        "2": "Per player per stage"
+      }
+    }
+  },
+  "coop_count": {
+    "scope": 0,
+    "value_min": 1,
+    "value_default": 3,
+    "id": "coop_count",
+    "value_display_formatting": " $0",
+    "value_display_multiplier": 1,
+    "value_max": 100
+  },
+  "coop_mountain": {
+    "id": "coop_mountain",
+    "scope": 0,
+    "value_default": true
+  },
+  "coop_boss_unlimited": {
+    "id": "coop_boss_unlimited",
+    "scope": 0,
+    "value_default": true
+  },
+  "coop_boss_recover": {
+    "id": "coop_boss_recover",
+    "scope": 0,
+    "value_default": true
+  },
+  "rebind_mountain_return": {
+    "ui_fn": "<function>",
+    "value_default": "44",
+    "id": "rebind_mountain_return",
+    "scope": 2,
+    "is_waiting_for_input": false
+  },
+  "return_gamepad_button": {
+    "value_default": "23",
+    "id": "return_gamepad_button",
+    "scope": 2,
+    "values": {
+      "1": {
+        "1": "23",
+        "2": "A / Cross"
+      },
+      "2": {
+        "1": "24",
+        "2": "B / Circle"
+      },
+      "3": {
+        "1": "25",
+        "2": "X / Square"
+      },
+      "4": {
+        "1": "26",
+        "2": "Y / Triangle"
+      },
+      "5": {
+        "1": "19",
+        "2": "Left shoulder"
+      },
+      "6": {
+        "1": "20",
+        "2": "Right shoulder"
+      }
+    }
+  },
+  "rebind_ping": {
+    "ui_fn": "<function>",
+    "value_default": "42",
+    "id": "rebind_ping",
+    "scope": 2,
+    "is_waiting_for_input": false
+  },
+  "rebind_lspectate": {
+    "ui_fn": "<function>",
+    "value_default": "54",
+    "id": "rebind_lspectate",
+    "scope": 2,
+    "is_waiting_for_input": false
+  },
+  "rebind_rspectate": {
+    "ui_fn": "<function>",
+    "value_default": "55",
+    "id": "rebind_rspectate",
+    "scope": 2,
+    "is_waiting_for_input": false
+  },
+  "rebind_sspectate": {
+    "ui_fn": "<function>",
+    "value_default": "56",
+    "id": "rebind_sspectate",
+    "scope": 2,
+    "is_waiting_for_input": false
+  },
+  "rebind_mspectate": {
+    "ui_fn": "<function>",
+    "value_default": "52",
+    "id": "rebind_mspectate",
+    "scope": 2,
+    "is_waiting_for_input": false
+  },
+  "rebind_ptt": {
+    "ui_fn": "<function>",
+    "value_default": "23",
+    "id": "rebind_ptt",
+    "scope": 2,
+    "is_waiting_for_input": false
+  },
+  "ptt_toggle": {
+    "value_default": false,
+    "id": "ptt_toggle",
+    "scope": 2
+  },
+  "text": {
+    "ui_fn": "<function>",
+    "value_default": "40",
+    "id": "text",
+    "scope": 2,
+    "is_waiting_for_input": false
+  },
+  "stoptext": {
+    "ui_fn": "<function>",
+    "value_default": "76",
+    "id": "stoptext",
+    "scope": 2,
+    "is_waiting_for_input": false
+  },
+  "no_gamepad": {
+    "value_default": false,
+    "id": "no_gamepad",
+    "scope": 2
+  },
+  "notext": {
+    "value_default": false,
+    "id": "notext",
+    "scope": 2
+  },
+  "nochathint": {
+    "value_default": true,
+    "id": "nochathint",
+    "scope": 2
+  },
+  "textcolor": {
+    "value_min": 0,
+    "value_default": 0,
+    "id": "textcolor",
+    "scope": 2,
+    "value_max": 255
+  },
+  "textaltcolor": {
+    "value_min": 0,
+    "value_default": 255,
+    "id": "textaltcolor",
+    "scope": 2,
+    "value_max": 255
+  },
+  "ping_life": {
+    "value_default": "30.0",
+    "id": "ping_life",
+    "scope": 2
+  },
+  "ping_sound": {
+    "value_default": true,
+    "id": "ping_sound",
+    "scope": 2
+  },
+  "ping_opacity": {
+    "value_min": 30,
+    "value_max": 90,
+    "value_display_multiplier": 1,
+    "value_display_formatting": " $0%",
+    "value_default": 65,
+    "id": "ping_opacity",
+    "scope": 2
+  },
+  "ping_size": {
+    "value_default": "0.0",
+    "id": "ping_size",
+    "scope": 2
+  },
+  "disable_cursors": {
+    "value_default": false,
+    "id": "disable_cursors",
+    "scope": 2
+  },
+  "disable_arrows": {
+    "value_default": false,
+    "id": "disable_arrows",
+    "scope": 2
+  },
+  "disable_nametags": {
+    "value_default": false,
+    "id": "disable_nametags",
+    "scope": 2
+  },
+  "revive_on_drop": {
+    "value_default": false,
+    "id": "revive_on_drop",
+    "scope": 2
+  },
+  "flex": {
+    "value_default": false,
+    "id": "flex",
+    "scope": 2
+  },
+  "log_performance": {
+    "value_default": false,
+    "id": "log_performance",
+    "scope": 2
+  },
+  "native_world_decode": {
+    "value_default": true,
+    "id": "native_world_decode",
+    "scope": 2
+  },
+  "cache": {
+    "value_default": false,
+    "id": "cache",
+    "scope": 2
+  },
+  "enable_log": {
+    "value_default": true,
+    "id": "enable_log",
+    "scope": 0
+  },
+  "text_range": {
+    "value_default": "0",
+    "id": "text_range",
+    "scope": 2
+  },
+  "tetherrange": {
+    "value_default": "0",
+    "id": "tetherrange",
+    "scope": 2
+  },
+  "world_sync": {
+    "value_default": "4",
+    "id": "world_sync",
+    "scope": 2
+  },
+  "disable_shield": {
+    "value_default": false,
+    "id": "disable_shield",
+    "scope": 2
+  },
+  "team": {
+    "value_default": "0",
+    "id": "team",
+    "scope": 2
+  }
+}

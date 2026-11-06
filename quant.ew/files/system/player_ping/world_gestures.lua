@@ -1,6 +1,6 @@
 -- Pure local intent classification; no input, network or gameplay API calls.
 -- classify does not allocate network IDs or mutate history. commit follows an
--- accepted publication/cancel, or extends an explicitly suppressed local burst.
+-- accepted publication/cancel/hide, or extends an explicitly suppressed local burst.
 local G={BURST_FRAMES=18,SAME_POINT_RADIUS=3,SAME_INPUT_RADIUS=3,NEARBY_RADIUS=20}
 local function finite(n)return type(n)=="number"and n==n and math.abs(n)<math.huge end
 local function distance(x,y,a,b)return(x-a)^2+(y-b)^2 end
@@ -39,16 +39,16 @@ function G.classify(state,o)
     if not finite(o.now)or not finite(o.x)or not finite(o.y)or type(o.own)~="string"
         or(o.kind~="location"and o.kind~="wand"and not identified(o.kind))then return decision("blocked",nil,"invalid intent")end
     local selected=o.selected and(o.selected.record or o.selected)
-    if selected and selected.sender~=o.own then return decision("blocked",selected,"foreign marker")end
     local last=state.last
     local age=last and o.now-last.at
     local burst=age and age>=0 and age<=G.BURST_FRAMES
-    if burst and last.action=="cancel"then
+    if burst and(last.action=="cancel"or last.action=="hide")then
         -- Camera/world motion cannot turn a repeat at the clicked visual input
         -- position into a new placement. Other positions/devices remain usable.
-        if same_input(input_position(o.input),last.input)then return decision("blocked",nil,"cancel burst")end
+        if same_input(input_position(o.input),last.input)then return decision("blocked",nil,last.action.." burst")end
         burst=false
     end
+    if selected and selected.sender~=o.own then return decision("hide",selected)end
     local near_last=burst and distance(o.x,o.y,last.x,last.y)<=G.SAME_POINT_RADIUS^2
     local previous=burst and active(o.records,last,o.own)
     local function upgrade(r)
@@ -102,19 +102,19 @@ function G.commit(state,d,record)
     if d.action=="blocked"then
         local last=state.last
         local allowed=d.reason=="repeated burst"or d.reason=="repeated wand burst"
-            or d.reason=="fresh marker"or d.reason=="cancel burst"
+            or d.reason=="fresh marker"or d.reason=="cancel burst"or d.reason=="hide burst"
         if not allowed or not last or d.now<last.at or d.now-last.at>G.BURST_FRAMES then return false end
         local same_point=distance(d.input_x or d.x,d.input_y or d.y,last.x,last.y)<=G.SAME_POINT_RADIUS^2
         local same_wand=d.reason=="repeated wand burst"and d.identity~=nil and d.identity==last.identity
-        if d.reason=="cancel burst"then
-            if last.action~="cancel"or not same_input(input_position(d.input),last.input)then return false end
+        if d.reason=="cancel burst"or d.reason=="hide burst"then
+            if d.reason~=last.action.." burst"or not same_input(input_position(d.input),last.input)then return false end
         elseif not(same_point or same_record(d.record,last)or same_wand)then return false end
         last.at=d.now -- Keep the original point, action, kind and network identity.
         return true
     end
-    if d.action~="create"and d.action~="refresh"and d.action~="upgrade"and d.action~="cancel"then return false end
+    if d.action~="create"and d.action~="refresh"and d.action~="upgrade"and d.action~="cancel"and d.action~="hide"then return false end
     record=record or d.record
-    if d.action~="cancel"and type(record)~="table"then return false end
+    if d.action~="cancel"and d.action~="hide"and type(record)~="table"then return false end
     state.last={at=d.now,action=d.action,x=d.input_x or d.x,y=d.input_y or d.y,kind=d.kind,
         identity=d.identity,id=record and record.id,target=record and record.target,key=record and record.key,
         epoch=record and record.epoch,input=input_position(d.input)}

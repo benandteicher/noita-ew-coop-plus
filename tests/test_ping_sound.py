@@ -14,7 +14,7 @@ class SoundTests(unittest.TestCase):
   l.execute('S=assert(loadstring(...))()',(ROOT/'quant.ew/files/system/player_ping/sound.lua').read_text())
   l.execute("""
   S.play(false);assert(#calls==0)
-  S.play(true);assert(#calls==1 and calls[1][1]=='data/audio/Desktop/ui.bank'and calls[1][2]=='ui/button_click')
+  S.play(true);assert(#calls==1 and calls[1][1]=='data/audio/Desktop/ui.bank'and calls[1][2]=='ui/button_select')
   assert(calls[1][3]==10 and calls[1][4]==20)
   for i=1,100 do S.update(i)end;S.clear();assert(#calls==1)
   """)

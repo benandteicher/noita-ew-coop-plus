@@ -184,7 +184,7 @@ def build(args) -> dict:
         "The existing mods/quant.ew is backed up outside active mods. The launcher closes after opening the graphical proxy; CLI modes keep console behavior.\r\n"
         "Settings/saves remain in the official proxy/game profile locations. Do not move them into managed mod/proxy folders.\r\n"
         "Review updater/README.md in the source repository for candidate limitations and setup command options.\r\n"
-        "This bundle includes the complete R14 payload. Draft assets are not an anonymous public update feed.\r\n"
+        f"This bundle includes the complete {'R14' if args.runtime_source == 'r14' else 'publication-commit'} payload. Draft assets are not an anonymous public update feed.\r\n"
     ).encode("utf-8")
     bootstrap_name = f"Co-op-Plus-{args.version}-build{args.build}-bootstrap-win.zip"
     write_zip(output / bootstrap_name, bootstrap_entries)

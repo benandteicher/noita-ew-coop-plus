@@ -3,6 +3,7 @@ local model=dofile_once('mods/quant.ew/files/system/player_ping/model.lua')
 local renderer=dofile_once('mods/quant.ew/files/system/player_ping/renderer.lua')
 local snapshot=dofile_once('mods/quant.ew/files/system/player_ping/wand_snapshot.lua')
 local identification=dofile_once('mods/quant.ew/files/system/player_ping/identification.lua')
+local world_target=dofile_once('mods/quant.ew/files/system/player_ping/world_target.lua')
 local preview=dofile_once('mods/quant.ew/files/system/player_ping/wand_preview.lua')
 local teammates=dofile_once('mods/quant.ew/files/system/player_arrows/teammates.lua')
 local sound=dofile_once('mods/quant.ew/files/system/player_ping/sound.lua')
@@ -20,6 +21,7 @@ local run,run_serial,epoch,next_id,last_frame,last_body,last_ng,last_tap,last_id
 local targets={}
 local queued,inventory_queued,shared_until
 local held_target,had_held,selected_core,last_input_device
+local target_hint
 local keynames
 local function finite(n)return model.finite(n)end
 local function counter(key)
@@ -60,7 +62,7 @@ do
 end
 local function clear_view(keep_held)
     GuiStartFrame(gui) -- Explicit suspension also clears the last drawn widgets.
-    preview.clear();renderer.clear();sound.clear();last_tap,last_id,queued,selected_core=nil,nil,nil,nil;gestures.clear(gesture_state)
+    preview.clear();renderer.clear();sound.clear();last_tap,last_id,queued,selected_core,target_hint=nil,nil,nil,nil,nil;gestures.clear(gesture_state)
     if not keep_held then preview.clear_held();inventory_hover.close();inventory_queued,shared_until=nil,nil end
 end
 local function reset(value,serial,now)
@@ -102,9 +104,9 @@ function rpc.ping(packet)
     end
     local now=GameGetFrameNum()
     local record,event=model.accept(state,peer,clean,now)
-    if record and event=='new'and not menu_hidden()and not inventory()and focused()then
-        if ModSettingGet('quant.ew.ping_sound')~=false and now-(last_cue or -100)>=12 then
-            last_cue=now;sound.play(true)
+    if record and event=='new'and peer~=ctx.my_id and not menu_hidden()and not inventory()and focused()then
+        if ModSettingGet('quant.ew.ping_sound')~=false and now-(last_cue or -100)>=30 then
+            last_cue=now;sound.play(true,record.kind)
         end
     end
 end
@@ -182,43 +184,17 @@ local function input_position(v,device,x,y)
             y=v.h/2+(y-v.camera_y)*v.h/v.world_h,device=device,space='gui',w=v.w,h=v.h}
     end
 end
-local function world_wand(x,y,v)
-    if not finite(v.origin_x)or not finite(v.origin_y)then return end
-    local ids=EntityGetInRadiusWithTag(x,y,12,'wand')or{}
-    if #ids>64 then return end -- ambiguous/flooded targeting falls back to a location
-    local best,best_d
-    for _,e in ipairs(ids)do
-        if EntityGetIsAlive(e)and EntityGetRootEntity(e)==e then
-            local wx,wy=EntityGetTransform(e);local item=EntityGetFirstComponentIncludingDisabled(e,'ItemComponent')
-            local sprite=EntityGetFirstComponentIncludingDisabled(e,'SpriteComponent')
-            if finite(wx)and finite(wy)and item and ComponentGetIsEnabled(item)
-                and sprite and ComponentGetIsEnabled(sprite)and ComponentGetValue2(item,'is_pickable')
-                and math.abs(wx-v.camera_x)<=v.world_w/2 and math.abs(wy-v.camera_y)<=v.world_h/2
-                and DoesWorldExistAt(wx-2,wy-2,wx+2,wy+2)
-                and not RaytraceSurfaces(v.origin_x,v.origin_y,wx,wy)then
-                local distance=(wx-x)^2+(wy-y)^2
-                if distance<=144 and(not best_d or distance<best_d or(distance==best_d and e<best))then
-                    local data=snapshot.capture(e)
-                    if data then best,best_d=e,distance end
-                end
-            end
-        end
-    end
-    if best then local wx,wy=EntityGetTransform(best);return best,wx,wy,snapshot.capture(best)end
-end
 local function emit(x,y,v,now,selected,input)
     if not run or not epoch or not finite(x)or not finite(y)then return end
     local entity,wx,wy,data,ident
-    if not selected then entity,wx,wy,data=world_wand(x,y,v)end
-    if not selected and not data then
-        entity,wx,wy,ident=identification.target(x,y,v)
-        if ident then
-            -- Recheck the actual root at publication, never serialize a vanished
-            -- or moved-to-inventory object merely because it was just targeted.
-            wx,wy,ident=identification.capture(entity,v)
-            if not ident or not finite(wx)or not finite(wy)or(wx-x)^2+(wy-y)^2>144 then
-                entity,wx,wy,ident=nil,nil,nil,nil
-            end
+    if not selected then
+        local choice=world_target.target(x,y,v,target_hint and target_hint.entity)
+        choice=choice and world_target.revalidate(choice,x,y,v)
+        if choice then
+            entity,wx,wy,ident=choice.entity,choice.x,choice.y,choice.ident
+            -- Only activation captures the wand's contents. Hover uses geometry.
+            if choice.kind=='wand'then data=snapshot.capture(entity)end
+            if not data and not ident then entity,wx,wy=nil,nil,nil end
         end
     end
     local kind=data and 'wand'or ident and ident.category or 'location'
@@ -227,8 +203,10 @@ local function emit(x,y,v,now,selected,input)
     local d=gestures.classify(gesture_state,{now=now,x=x,y=y,kind=kind,identity=identity,
         selected=selected,input=input,own=ctx.my_id,records=model.list(state),identities=identities})
     if d.action=='blocked'then gestures.commit(gesture_state,d);return end
-    if d.action=='cancel'then
-        rpc.cancel(run,epoch,d.record.id);gestures.commit(gesture_state,d)
+    if d.action=='cancel'or d.action=='hide'then
+        if d.action=='hide'then model.hide(state,d.record.key)
+        else rpc.cancel(run,epoch,d.record.id)end
+        gestures.commit(gesture_state,d);preview.clear();target_hint=nil
         if selected_core==d.record.key then selected_core=nil end
         return
     end
@@ -312,11 +290,19 @@ local function draw(now)
     GuiZSet(gui,8)
     local occluded=preview.blocks_world and preview.blocks_world(mx,my)
     local markers=renderer.draw(gui,visible_records(),{view=v,now=now,names=names,
-        local_peer=ctx.my_id,removal_hint=ping_binding()..' Remove ping',
+        local_peer=ctx.my_id,removal_hint=ping_binding()..' Remove ping',hide_hint=ping_binding()..' Hide ping',
         selected_key=preview.active_key()or selected_core,idle_opacity=(tonumber(ModSettingGet('quant.ew.ping_opacity'))or 65)/100,
         extra_size=tonumber(ModSettingGet('quant.ew.ping_size'))or 0,mx=not occluded and mx or nil,my=not occluded and my or nil,reserved=reserved})
     selected_core=markers.hover_key
     preview.draw(gui,markers,{now=now,w=v.w,h=v.h,mx=mx,my=my,body=entity})
+    local previous_target=target_hint and target_hint.entity
+    target_hint=nil
+    if not selected_core and not preview.active_key()and not occluded and not ctx.coop_return_input_block
+        and(not EntityHasTag(entity,'polymorphed')or EntityHasTag(entity,'ew_notplayer'))then
+        local x,y=point(v,last_input_device or'mouse')
+        target_hint=world_target.target(x,y,v,previous_target)
+        if target_hint then world_target.draw_hint(gui,target_hint,v)end
+    end
 end
 function module.on_world_update()
     local now=GameGetFrameNum();world_input.begin(input_clock,now);sound.update(now)

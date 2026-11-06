@@ -1,7 +1,7 @@
 # Noita Entangled Worlds: Co-op+
 
 Personal Windows co-op fork of [IntQuant/noita_entangled_worlds](https://github.com/IntQuant/noita_entangled_worlds).
-The first updater candidate wraps the unchanged official v1.6.8 proxy and preserves the frozen R14 mod runtime.
+The updater wraps the unchanged official v1.6.8 proxy. Candidate 1.9.15.0/build 3 adds broader Ping+ targeting, local teammate-ping hiding, organized settings and a softer native cue; it is draft-only pending independent review.
 
 See [updater setup and review](updater/README.md) and [release workflow](updater/PUBLICATION.md).
 Draft releases are for review and are not an anonymous update channel. Ordinary source commits never update clients.

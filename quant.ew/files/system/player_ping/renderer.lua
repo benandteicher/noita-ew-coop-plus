@@ -158,10 +158,12 @@ function M.draw(gui,records,opts)
                 marker.label_alpha*.86,{.72,.70,.64})
             if shared then add_label(marker,"source","shared wand",{-23,-35,-47,38,50,26},marker.label_alpha*.78,{.60,.65,.65}) end
         end
-        if marker.hovered and marker.sender==opts.local_peer and age>18 and type(opts.removal_hint)=="string"then
+        local hint
+        if marker.sender==opts.local_peer then hint=opts.removal_hint else hint=opts.hide_hint end
+        if marker.hovered and opts.local_peer and age>18 and type(hint)=="string"then
             -- Share the measured text occupancy instead of drawing a second
             -- independent hint over the owner/distance/shared-wand labels.
-            add_label(marker,"hint",opts.removal_hint,{14,-47,26,-59,38,50},.9,{.78,.76,.66})
+            add_label(marker,"hint",hint,{14,-47,26,-59,38,50},.9,{.78,.76,.66})
         end
     end
     -- Only text yields to HUD/text/core conflicts. All cores keep their projection.

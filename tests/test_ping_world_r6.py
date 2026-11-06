@@ -116,7 +116,8 @@ class WorldInputAdapterTests(unittest.TestCase):
         p=self.peers();self.phase(p)
         p.a.execute('ping.on_world_update_post();ping.on_world_update_post()');p.flush()
         self.assertEqual(p.a.eval('ping_records()[1].seq'),1)
-        self.assertEqual(p.a.eval('calls.ping_cues'),1)
+        self.assertIsNone(p.a.eval('calls.ping_cues'))
+        self.assertEqual(p.b.eval('calls.ping_cues'),1)
         for lead in (-1,2,10):
             with self.subTest(lead=lead):
                 p=self.peers();self.phase(p,lead=lead)

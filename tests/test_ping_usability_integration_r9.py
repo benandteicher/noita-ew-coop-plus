@@ -44,9 +44,9 @@ class PingUsabilityIntegrationTests(unittest.TestCase):
  def test_foreign_edge_hit_never_falls_through_to_clamped_location(self):
   p=self.t.peers();p.b.execute('cursor_x=1000;cursor_y=0');self.t.press(p,'B');self.t.step(p,20)
   p.a.execute('local v=calls.ping_view;local r=ping_records()[1];local q=dofile_once("mods/quant.ew/files/system/player_ping/projection.lua").project(r.x,r.y,v);cursor_x=v.camera_x+(q.x-v.w/2)*v.world_w/v.w;cursor_y=v.camera_y+(q.y-v.h/2)*v.world_h/v.h');self.t.press(p)
-  for l in p.peers.values():
-   self.assertEqual(l.eval('#ping_records()'),1)
-   self.assertEqual(l.eval('ping_records()[1].sender'),'B')
+  self.assertEqual(p.a.eval('#ping_records()'),0)
+  self.assertEqual(p.b.eval('#ping_records()'),1)
+  self.assertEqual(p.b.eval('ping_records()[1].sender'),'B')
  def test_same_place_danger_and_different_quick_points_and_owner_lifetime(self):
   p=self.t.peers();p.a.execute("settings['quant.ew.ping_life']='2'");p.b.execute("settings['quant.ew.ping_life']='120'")
   self.t.press(p);self.t.step(p,3);self.t.press(p)

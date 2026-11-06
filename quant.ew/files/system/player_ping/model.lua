@@ -101,6 +101,17 @@ function M.cancel(state,sender,epoch,id)
     return true,removed
 end
 
+-- A local presentation choice belongs to this exact active event. Keeping its
+-- bounded record preserves the sender's allowance, duplicate floor and ordinary
+-- revisions without allocating an unbounded history of hidden IDs.
+function M.hide(state,key)
+    if type(key)~="string"then return false end
+    local record=state.records[key]
+    if not record then return false end
+    record.hidden=true
+    return true,record
+end
+
 -- The old fifth TTL argument is intentionally ignored. Lifetimes belong to
 -- owner-published danger events; all other cosmetic records last this session.
 function M.accept(state, sender, packet, now, _legacy_ttl)
@@ -155,6 +166,9 @@ function M.accept(state, sender, packet, now, _legacy_ttl)
     local record = state.records[key]
     if record then
         if packet.seq <= record.seq or target ~= record.target or source ~= record.source then return end
+        -- A deliberate danger upgrade is new information. Coordinate/anchor
+        -- revisions and duplicate danger packets keep a locally hidden event so.
+        if packet.kind=="danger"and record.kind~="danger"then record.hidden=nil end
         record.seq, record.kind, record.x, record.y, record.wand, record.ident = packet.seq, packet.kind, packet.x, packet.y, wand, ident
         record.updated, record.expires, record.life = now, expires, life
         return record, "update"
@@ -187,7 +201,7 @@ end
 
 function M.list(state)
     local result = {}
-    for _, record in pairs(state.records) do result[#result + 1] = record end
+    for _, record in pairs(state.records) do if not record.hidden then result[#result + 1] = record end end
     table.sort(result, function(a, b)
         if a.sender ~= b.sender then return a.sender < b.sender end
         if a.epoch ~= b.epoch then return a.epoch < b.epoch end
