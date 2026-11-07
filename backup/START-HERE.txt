@@ -1,0 +1,16 @@
+1. On both PCs, Save & Quit Noita at the same stopping point. Close both proxies.
+2. Put CoopPlusBackup.exe beside your usual CoopPlus.exe and open it.
+3. Check the shown profile and EW state. Click Back up now.
+   If EW state is empty, confirm the client checkbox only if this PC joins the
+   other player. The host's matching backup is also required for recovery.
+4. Wait for Verified file copy complete. Open backup folder shows the result.
+
+Each PC needs its own backup. Keep the dated folders unchanged and private.
+The program verifies file copies; it does not test whether the run can Continue.
+RESTORE.txt inside each completed backup explains the paired state and runtime.
+No restore/delete buttons, scheduling, installation, Python or admin access.
+
+This version supports the selected coopplus.json and proxy.ron paths.
+Custom shortcut storage overrides are refused for manual review. Launches from
+unrecorded command lines or scripts are outside automatic path discovery; do not
+use the shown selection if that is how you selected a different run.
