@@ -202,7 +202,7 @@ class GoldTests(unittest.TestCase):
  def test_tag_without_identity_falls_back_to_pickable_personal_gold(self):
   p=self.peers();p.a.execute("e=EntityCreateNew('legacy gold');EntityAddTag(e,'gold_nugget');EntityAddTag(e,'ew_income_gold');EntityAddComponent2(e,'ItemComponent',{is_pickable=false});assert(cross.ew_income_pickup(e,ctx.my_player.entity)==false)")
   p.tick(180);self.assertTrue(p.a.eval('entities[e].c.ItemComponent.is_pickable'))
-  self.assertEqual((p.money('A'),p.money('B')),(100,100));self.assertIsNone(p.ledger('.accounts.A'))
+  self.assertEqual((p.money('A'),p.money('B')),(100,100));self.assertEqual(p.ledger('.accounts.A.next'),0)
  def test_nested_native_generators_cannot_save_the_temporary_false_gate(self):
   p=self.peers();p.a.execute('''
   e=EntityCreateNew('canonical gold');EntityAddTag(e,'gold_nugget');EntityAddComponent2(e,'ItemComponent',{is_pickable=true})

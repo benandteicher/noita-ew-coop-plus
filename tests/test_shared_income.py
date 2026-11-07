@@ -14,13 +14,29 @@ class IncomePeers(Peers):
             lua.globals().SEND=lambda method,data,sender=name:self.q.append((sender,method,data))
             lua.execute((ROOT/'tests/coop_fixture.lua').read_text())
             lua.execute((ROOT/'tests/income_fixture.lua').read_text())
-            for k,v in (restored or {}).get(name,{}).items():lua.globals().globals[k]=v
+            for k,v in (restored or {}).get(name,{}).items():
+                if not k.startswith('__'):lua.globals().globals[k]=v
             lua.execute(configure)
+            snapshot=(restored or {}).get(name,{})
+            if '__body' in snapshot:
+                lua.globals().RESTORED_BODY=snapshot['__body']
+                lua.execute('entities[ctx.my_player.entity]=decode(RESTORED_BODY)')
+                lua.globals().flags.ew_flag_notplayer_active=snapshot['__body_dead']
+
             lua.execute('load_modules()')
             self.peers[name]=lua
         self.a,self.b=self.peers.values()
         self.a.execute('income.on_should_send_updates();coop.on_should_send_updates()');self.flush()
         self.b.execute('ctx.cap.coop_revival.dead_ready()');self.flush()
+    def snapshot(self):
+        # A native saved checkpoint includes the body wallet/receipt and all
+        # paged Globals. Copying only two root strings is an invalid v2 fixture.
+        out={}
+        for name,lua in self.peers.items():
+            out[name]={k:v for k,v in lua.globals().globals.items() if k.startswith('ew_income')}
+            out[name]['__body']=lua.eval('encode(entities[ctx.my_player.entity])')
+            out[name]['__body_dead']=lua.eval('flags.ew_flag_notplayer_active')
+        return out
     def pickup(self,who='A',gid='42',value=10):
         # Registration and native callback substitute, not engine collection proof.
         for lua in self.peers.values():lua.execute(f"gold=nugget('{gid}',{value})")
@@ -28,7 +44,7 @@ class IncomePeers(Peers):
         self.peers[who].execute("cross.ew_income_pickup(gold,ctx.my_player.entity)")
         self.flush();self.tick(35)
     def money(self,peer):return self.peers[peer].eval('entities[ctx.my_player.entity].c.WalletComponent.money')
-    def ledger(self,expr):return self.a.eval('decode(globals.ew_income_run_v1)'+expr)
+    def ledger(self,expr):return self.a.eval("dofile_once('mods/quant.ew/files/system/shared_income/persistence.lua').read('ew_income_run_v1')"+expr)
 
 class IncomeTests(unittest.TestCase):
     def test_default_off_and_client_cannot_enable(self):
@@ -113,7 +129,7 @@ class IncomeTests(unittest.TestCase):
         self.assertEqual(p.ledger('.accounts.B.next'),1)
         p.a.execute('ctx.players.B.dc=false');p.tick(35)
         self.assertEqual(p.money('B'),150)
-        p.a.execute("local s=decode(globals.ew_income_run_v1);receive('A','pay',encode({'B',s.run,{seq=1,id='80',amount=50,collector='A'}}))")
+        p.a.execute("local s=decode(globals.ew_income_run_v1);receive('A','pay',encode({'B',s.run,{seq=1,id='80',amount=50,collector='A'},decode(globals.ew_income_owner_v1).session}))")
         p.flush();self.assertEqual(p.money('B'),150)
 
     def test_new_arrival_not_retroactive_and_disconnect_at_claim_not_eligible(self):
@@ -140,7 +156,7 @@ class IncomeTests(unittest.TestCase):
             assert(decode(globals.ew_income_owner_v1).applied==1)
             ''')
         p.flush();p.tick(35);self.assertEqual(p.money('B'),110)
-        fresh=IncomePeers();self.assertEqual(fresh.ledger('.accounts.A'),None)
+        fresh=IncomePeers();self.assertEqual(fresh.ledger('.accounts.A.next'),0)
         self.assertEqual(fresh.money('A'),100)
 
     def test_spectator_suppression_restores_exact_states_and_item_protections(self):
@@ -167,7 +183,7 @@ class IncomeTests(unittest.TestCase):
         p=IncomePeers()
         p.a.execute("gold=nugget('904',25);frame=60;income.on_world_update();cross.ew_income_pickup(gold,100);ctx.players.B.dc=true")
         p.flush();p.tick(35)
-        saved={k:{name:lua.eval('globals')[name]for name in ('ew_income_run_v1','ew_income_owner_v1')if lua.eval('globals')[name]}for k,lua in p.peers.items()}
+        saved=p.snapshot()
         q=IncomePeers("if PEER=='A'then entities[100].c.WalletComponent.money=125 end",saved)
         q.tick(65)
         self.assertEqual((q.money('A'),q.money('B')),(125,125))
@@ -176,11 +192,11 @@ class IncomeTests(unittest.TestCase):
 
     def test_reordered_payments_wait_for_missing_sequence_and_duplicates_do_not_animate(self):
         p=IncomePeers('settings.statue=false')
-        p.b.execute("receive('A','pay',encode({'B',decode(globals.ew_income_owner_v1).run,{seq=2,id='2',amount=10,collector='A'}}))")
+        p.b.execute("receive('A','pay',encode({'B',decode(globals.ew_income_owner_v1).run,{seq=2,id='2',amount=10,collector='A'},decode(globals.ew_income_owner_v1).session}))")
         self.assertEqual(p.money('B'),100)
-        p.b.execute("receive('A','pay',encode({'B',decode(globals.ew_income_owner_v1).run,{seq=1,id='1',amount=10,collector='A'}}))")
+        p.b.execute("receive('A','pay',encode({'B',decode(globals.ew_income_owner_v1).run,{seq=1,id='1',amount=10,collector='A'},decode(globals.ew_income_owner_v1).session}))")
         p.flush();self.assertEqual(p.money('B'),110)
-        p.b.execute("receive('A','pay',encode({'B',decode(globals.ew_income_owner_v1).run,{seq=2,id='2',amount=10,collector='A'}}))")
+        p.b.execute("receive('A','pay',encode({'B',decode(globals.ew_income_owner_v1).run,{seq=2,id='2',amount=10,collector='A'},decode(globals.ew_income_owner_v1).session}))")
         p.flush();self.assertEqual(p.money('B'),120)
 
     def test_registration_order_race_and_connected_dead_without_loaded_body(self):
@@ -205,11 +221,11 @@ class IncomeTests(unittest.TestCase):
 
     def test_mismatched_receipt_save_pauses_without_repaying_history(self):
         p=IncomePeers();p.pickup()
-        saved={k:{name:lua.eval('globals')[name]for name in ('ew_income_run_v1','ew_income_owner_v1')if lua.eval('globals')[name]}for k,lua in p.peers.items()}
-        saved['B'].pop('ew_income_owner_v1')
+        saved=p.snapshot()
+        saved['B'].pop('ew_income_owner_v1');saved['B'].pop('__body')
         q=IncomePeers('',saved)
         self.assertFalse(q.b.eval('ctx.cap.shared_income.enabled()'))
-        self.assertIn('mismatch',q.b.eval('calls.message'))
+        self.assertIn('no recovery receipt',q.b.eval('calls.message'))
         self.assertEqual(q.money('B'),100)
         q.b.execute("assert(cross.ew_income_pickup(nugget('9999',10),ctx.my_player.entity)==true)")
 
@@ -219,7 +235,7 @@ class IncomeTests(unittest.TestCase):
         o.claims['601']={greed=0,item={value=50,hp=.16,x=0,y=0},life=o.life or 0}
         globals.ew_income_owner_v1=encode(o)
         ''')
-        saved={k:{name:lua.eval('globals')[name]for name in ('ew_income_run_v1','ew_income_owner_v1')if lua.eval('globals')[name]}for k,lua in p.peers.items()}
+        saved=p.snapshot()
         q=IncomePeers('settings.statue=false',saved);q.tick(35)
         q.a.execute('''local effects=EntityGetWithTag('ew_income_effect');assert(#effects==1)
         local target;for _,v in ipairs(entities[effects[1]].vars)do if v._tags=='ew_income_actor'then target=v.value_int end end
@@ -227,9 +243,8 @@ class IncomeTests(unittest.TestCase):
         ''')
         saved['A']=dict(saved['A'])
         # A newer body generation must not receive the old body's healing.
-        q2=IncomePeers('''settings.statue=false
-        if PEER=='A'then local o=decode(globals.ew_income_owner_v1);o.life=1;globals.ew_income_owner_v1=encode(o)end
-        ''',saved)
+        saved['A']['__body']=p.a.eval("(function()local b=decode('"+saved['A']['__body']+"');for _,v in ipairs(b.vars)do if v.name=='ew_income_receipt_v2'then v.value_float=1 end end;return encode(b)end)()")
+        q2=IncomePeers('settings.statue=false',saved)
         q2.tick(35);self.assertEqual(q2.a.eval("#EntityGetWithTag('ew_income_effect')"),0)
 
     def test_chest_identity_single_replay_event_and_recipients_frozen(self):

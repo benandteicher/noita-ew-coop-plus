@@ -284,6 +284,53 @@ end
 
 local first = true
 
+local function reconcile_owned_tinker()
+    lazyload()
+    local entity = ctx.my_player.entity
+    -- A pickup counter and the saved character can come from different native
+    -- checkpoints after a crash. Ownership authorizes repairing this simple
+    -- perk's representation; another perk_pickup would increment the counter.
+    local count = tonumber(GlobalsGetValue(get_perk_picked_flag_name("EDIT_WANDS_EVERYWHERE") .. "_PICKUP_COUNT", "0")) or 0
+    if count <= 0 or ctx.run_ended or ctx.my_player.currently_polymorphed
+        or EntityHasTag(entity, "ew_notplayer") or EntityHasTag(entity, "polymorphed_player")
+        or GameGetGameEffectCount(entity, "NO_WAND_EDITING") > 0 then
+        return
+    end
+    local info = get_perk_with_id(perk_list, "EDIT_WANDS_EVERYWHERE")
+    if info == nil then return end
+    local icon_present = false
+    for _, child in ipairs(EntityGetAllChildren(entity) or {}) do
+        if EntityGetFilename(child) == "mods/quant.ew/files/system/player/twwe.xml"
+            and not EntityHasTag(child, "perk_entity") then
+            -- This exact EW proximity loan is not the owned perk. Retiring it
+            -- before effect detection prevents a loan from hiding missing state.
+            EntityKill(child)
+        else
+            for _, icon in ipairs(EntityGetComponentIncludingDisabled(child, "UIIconComponent") or {}) do
+                if ComponentGetValue2(icon, "icon_sprite_file") == info.ui_icon then
+                    icon_present = true
+                end
+            end
+        end
+    end
+    RemoveFlagPersistent("ew_twwe")
+    if GameGetGameEffectCount(entity, "EDIT_WANDS_EVERYWHERE") == 0 then
+        local effect, effect_entity = GetGameEffectLoadTo(entity, "EDIT_WANDS_EVERYWHERE", true)
+        if effect == nil or effect_entity == nil then return end
+        ComponentSetValue2(effect, "frames", -1)
+        EntityAddTag(effect_entity, "perk_entity")
+    end
+    if not icon_present and info.ui_icon ~= nil then
+        local icon = EntityCreateNew()
+        EntityAddTag(icon, "perk_entity")
+        EntityAddComponent2(icon, "UIIconComponent", {
+            icon_sprite_file = info.ui_icon, name = info.ui_name, description = info.ui_description,
+        })
+        EntityAddChild(entity, icon)
+    end
+    ctx.my_player.twwe = true
+end
+
 function perk_fns.on_world_update()
     if first then
         local needs_reset = false
@@ -312,6 +359,7 @@ function perk_fns.on_world_update()
         GameGetFrameNum() % 60 == 40
         and not EntityHasTag(ctx.my_player.entity, "ew_notplayer")
     then
+        reconcile_owned_tinker()
         local globals_ready = wait_for_globals == nil or GameGetFrameNum() > wait_for_globals
         if globals_ready then wait_for_globals = nil end
         local remaining = {}

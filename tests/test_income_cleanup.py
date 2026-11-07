@@ -15,7 +15,7 @@ class CleanupTests(unittest.TestCase):
             for method in ('register','claim','retired'):
                 self.assertEqual(lua.eval(f"calls.traffic['{method}'] or 0"),0,method)
     def saved(self,p):
-        return {k:{n:lua.eval('globals')[n]for n in ('ew_income_run_v1','ew_income_owner_v1')if lua.eval('globals')[n]}for k,lua in p.peers.items()}
+        return p.snapshot()
     def accept(self,p,who='A',id='42'):
         for lua in p.peers.values():lua.execute(f"gold=nugget('{id}',10);EntityAddComponent2(gold,'VariableStorageComponent',{{name='hp_value',value_float=.16}})")
         p.a.execute('frame=60;income.on_world_update()');p.flush()
@@ -48,7 +48,7 @@ class CleanupTests(unittest.TestCase):
         q=IncomePeers(ALIVE+';'+COUNT,self.saved(p));q.tick(35)
         self.assertEqual((q.money('A'),q.money('B')),(110,110))
         q.a.execute("assert(#EntityGetWithTag('ew_income_effect')==1)")
-        q.a.execute("local s=decode(globals.ew_income_run_v1);receive('A','pay',encode({'A',s.run,{seq=1,id='42',amount=10,collector='A'}}))")
+        q.a.execute("local s=decode(globals.ew_income_run_v1);receive('A','pay',encode({'A',s.run,{seq=1,id='42',amount=10,collector='A'},decode(globals.ew_income_owner_v1).session}))")
         q.flush();self.quiet(q)
         q.a.execute("assert(#EntityGetWithTag('ew_income_effect')==1)")
     def test_reload_legacy_retired_request_does_not_retry_or_repay(self):
