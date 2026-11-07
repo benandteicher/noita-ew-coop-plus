@@ -34,8 +34,8 @@
       "sha256": "08c75718eabb6066b2c6f390ae4cb1d95c49edfc524f2caf320096701c16fbd5"
     },
     "README.md": {
-      "size": 1115,
-      "sha256": "2c1e4483b42d7fe2c685e064e67f565bc57d0e9e6177349cd5d6a72515b0cbf9"
+      "size": 1198,
+      "sha256": "ff942a9dde5e0a2897f5c1772b4fe5cfbc64429a491b805a3526048457672bc4"
     },
     "THIRD-PARTY-NOTICES.txt": {
       "size": 1773,
@@ -64,6 +64,10 @@
     "docs/PINGPLUS_TARGETING.md": {
       "size": 6997,
       "sha256": "488bc27254610b8fb2748fff0428c447a2e57c9da4e9aa8c4283999725046133"
+    },
+    "docs/SHARED_TINKER.md": {
+      "size": 2671,
+      "sha256": "55b37b17272ee643a31449f7245af66536c40a02849f144841f863892d7da191"
     },
     "docs/testing_wands.md": {
       "size": 774,
@@ -409,6 +413,10 @@
       "size": 18827,
       "sha256": "d617f2dc989a5dea9dd961f8c04d240a93264224b4431f4f819f59669a2fa20e"
     },
+    "tests/test_shared_tinker.py": {
+      "size": 7579,
+      "sha256": "843a34d8e4c2f81ce24813051702ace6102aa926e5f90360124f90c2315e78c6"
+    },
     "tests/test_shop_hover.py": {
       "size": 5693,
       "sha256": "71e970dfd859057a051e64ed5a6c532d42ad6a59b452ffe15e26514c8df49f67"
@@ -618,8 +626,8 @@
       "sha256": "7595b9065d3ea74e8483c6007d6323df565189eed1bc04dd218a80fc4eea5e74"
     },
     "quant.ew/files/core/perk_fns.lua": {
-      "size": 10784,
-      "sha256": "6af5bb6e986f8a79bb76c2488d51e14b01340265168edf79007ede569f977906"
+      "size": 12813,
+      "sha256": "85c2e32aa9b7fb0b013fd3b151897113973937b63e46d7c19c72dc7d1f665805"
     },
     "quant.ew/files/core/player_fns.lua": {
       "size": 31128,
@@ -3278,18 +3286,10 @@
       "sha256": "693908b00ab383da43d066d3bde11cb259d80d35e7a137c8790d246d6bfe0d2f"
     }
   },
-  "candidate": "1.9.15.0/build3",
-  "baselinePublicationCommit": "21d363fc860d23e51b34d8795b304da72724efd1",
+  "candidate": "1.9.16.0/build4",
+  "baselinePublicationCommit": "ebf665777c908faf48a80ea269e9436ec2c5d5af",
   "runtimeSource": "Exact publication checkout; RuntimeSource checkout is required",
   "candidateRuntimeChanged": [
-    "quant.ew/settings.lua",
-    "quant.ew/files/system/player_ping/identification.lua",
-    "quant.ew/files/system/player_ping/model.lua",
-    "quant.ew/files/system/player_ping/player_ping.lua",
-    "quant.ew/files/system/player_ping/renderer.lua",
-    "quant.ew/files/system/player_ping/sound.lua",
-    "quant.ew/files/system/player_ping/vanilla_catalogue.lua",
-    "quant.ew/files/system/player_ping/world_gestures.lua",
-    "quant.ew/files/system/player_ping/world_target.lua"
+    "quant.ew/files/core/perk_fns.lua"
   ]
 }

@@ -36,6 +36,7 @@ local perks_to_ignore = {
 }
 
 local global_perks = {
+    EDIT_WANDS_EVERYWHERE = true,
     NO_MORE_SHUFFLE = true,
     UNLIMITED_SPELLS = true,
     TRICK_BLOOD_MONEY = true,
@@ -107,6 +108,21 @@ local function spawn_perk(perk_info, auto_pickup_entity)
     local perk_entity = perk_spawn(x, y - 8, perk_info.id)
     if auto_pickup_entity then
         perk_pickup(perk_entity, ctx.my_player.entity, nil, true, false)
+        if perk_info.id == "EDIT_WANDS_EVERYWHERE"
+            and tonumber(GlobalsGetValue(get_perk_picked_flag_name(perk_info.id) .. "_PICKUP_COUNT", "0")) > 0
+        then
+            -- Replace only EW's old short-range loan, never a personal perk or
+            -- native NO_WAND_EDITING/spectator effect. Native pickup owns the
+            -- actual count, effect, icon and normal conflict behavior.
+            for _, child in ipairs(EntityGetAllChildren(ctx.my_player.entity) or {}) do
+                if EntityGetFilename(child) == "mods/quant.ew/files/system/player/twwe.xml"
+                    and not EntityHasTag(child, "perk_entity") then
+                    EntityKill(child)
+                end
+            end
+            RemoveFlagPersistent("ew_twwe")
+            ctx.my_player.twwe = true
+        end
     end
 end
 
@@ -177,6 +193,9 @@ end
 
 local function deal_with_globals(perk_id, count)
     if global_perks[perk_id] then
+        -- Tinker is nonstackable. A peer's historical extra count must not
+        -- multiply the recipient's grants/icons.
+        if perk_id == "EDIT_WANDS_EVERYWHERE" then count = math.min(count, 1) end
         if to_spawn[perk_id] ~= nil then
             to_spawn[perk_id] = math.max(to_spawn[perk_id], count)
         else
@@ -192,6 +211,11 @@ function perk_fns.update_perks(perk_data, player_data)
     local entity = player_data.entity
     local current_counts = util.get_ent_variable(entity, "ew_current_perks") or {}
     for perk_id, count in pairs(perk_data) do
+        -- Old remote bodies can already remember this count on Continue, so
+        -- first acquisition's diff is insufficient for this new shared perk.
+        if perk_id == "EDIT_WANDS_EVERYWHERE" and count > 0 then
+            deal_with_globals(perk_id, count)
+        end
         local current = (current_counts[perk_id] or 0)
         local diff = count - current
         if diff ~= 0 then
@@ -286,20 +310,31 @@ function perk_fns.on_world_update()
     end
     if
         GameGetFrameNum() % 60 == 40
-        and (wait_for_globals == nil or GameGetFrameNum() > wait_for_globals)
         and not EntityHasTag(ctx.my_player.entity, "ew_notplayer")
     then
-        wait_for_globals = nil
+        local globals_ready = wait_for_globals == nil or GameGetFrameNum() > wait_for_globals
+        if globals_ready then wait_for_globals = nil end
+        local remaining = {}
         for perk_id, num in pairs(to_spawn) do
-            local n = perk_fns.get_my_perks()[perk_id] or 0
-            if num > n then
-                local perk_info = get_perk_with_id(perk_list, perk_id)
-                for _ = 1, num - n do
-                    spawn_perk(perk_info, true)
+            local tinker = perk_id == "EDIT_WANDS_EVERYWHERE"
+            if (not tinker and not globals_ready)
+                or (tinker and (ctx.run_ended or ctx.my_player.currently_polymorphed
+                    or EntityHasTag(ctx.my_player.entity, "polymorphed_player"))) then
+                remaining[perk_id] = num
+            else
+                local n = perk_fns.get_my_perks()[perk_id] or 0
+                if num > n then
+                    local perk_info = get_perk_with_id(perk_list, perk_id)
+                    for _ = 1, num - n do
+                        spawn_perk(perk_info, true)
+                    end
+                    if tinker and (perk_fns.get_my_perks()[perk_id] or 0) == 0 then
+                        remaining[perk_id] = num -- no body/position/pickup yet
+                    end
                 end
             end
         end
-        to_spawn = {}
+        to_spawn = remaining
     end
 end
 
