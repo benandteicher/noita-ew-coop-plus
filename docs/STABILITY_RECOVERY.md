@@ -33,6 +33,8 @@ collection waits with an explanation when retention is exhausted.
 
 Gold waiting for acceptance remains an identified world entity. Its pickup is
 gated and native attachment after the callback is undone before rendering/saving.
+Receipt-qualified cleanup also runs while host status is still unknown, so a
+saved pending nugget does not wait for the income handshake to leave inventory.
 Only exact shared gold is handled; unpaid gold is not deleted. Authoritative
 retirement determines when a collected nugget can be removed. Chest gold uses
 stable event/source identities so native replay cannot create a second payment

@@ -70,8 +70,8 @@
       "sha256": "55b37b17272ee643a31449f7245af66536c40a02849f144841f863892d7da191"
     },
     "docs/STABILITY_RECOVERY.md": {
-      "size": 4260,
-      "sha256": "0e3005d8213d6eefa0738358008c3fed551eec58434d7cd207331fb9245becba"
+      "size": 4417,
+      "sha256": "87afdec9a5ba1f803b734041556667ee7bfd3499d207a50f1410681c69220936"
     },
     "docs/testing_wands.md": {
       "size": 774,
@@ -288,6 +288,10 @@
     "tests/test_income_persistence.py": {
       "size": 6580,
       "sha256": "1b3967023c8b4fbcf5901997af7591f9946f30b40f50aeb3e4ad470a29924fbb"
+    },
+    "tests/test_income_startup_cleanup.py": {
+      "size": 7680,
+      "sha256": "f7fabfd14957356ef1e8420a556d7951047c34ede45f8e0140b92b945a6242e4"
     },
     "tests/test_native_speed_manager.py": {
       "size": 6886,
@@ -1338,8 +1342,8 @@
       "sha256": "3ed29ee3669ce59fa8cada80c9fe7a1a5ae8d13d0edf288b96a0833c3ae55b4a"
     },
     "quant.ew/files/system/shared_income/shared_income.lua": {
-      "size": 47500,
-      "sha256": "35570d806c2df7c0bf9364fba808e29224a6a320ccb0fdc2e8cbe9e730a8256b"
+      "size": 49813,
+      "sha256": "e6625548b46b2938ecdd3e7b2425b06a9a41322d2ebdff148cabef5f63e156ac"
     },
     "quant.ew/files/system/shiny_orb/append.lua": {
       "size": 119,

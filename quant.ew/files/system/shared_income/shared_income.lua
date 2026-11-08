@@ -11,6 +11,7 @@ local status_account
 local request_due=-1000
 local persistence_error=false
 local rain_supported=false
+local early_owner_raw,early_owner_data
 local dispatch_due=false
 local catalog,generated,waiting,local_pickups,played_chests={},{},{},{},{}
 local function finite(n)return type(n)=='number'and n==n and math.abs(n)<1e9 end
@@ -532,13 +533,13 @@ end
 -- an unpaid nugget alive in that callback must not leave it in an item slot.
 -- Only exact native gold with a stable shared identity qualifies; no generic
 -- inventory sweep, unknown-item deletion or wallet guess is involved.
-local function unpaid_gold_to_world(e,who,id)
+local function unpaid_gold_to_world(e,who,id,receipt_owner)
     if not valid_id(id)or not EntityHasTag(e,'gold_nugget')then return end
     local amount=value(e,'gold_value',0)
     local c=EntityGetFirstComponentIncludingDisabled(e,'ItemComponent')
     if not c or not ledger.integer(amount,2147483647)or amount<1 then return end
-    local restore_world=EntityHasTag(e,'ew_income_unpaid')and owner and(owner.claims[id]or owner.effects[id])
-    EntityAddTag(e,'ew_income_unpaid')
+    local disposition=receipt_owner or owner
+    local restore_world=EntityHasTag(e,'ew_income_unpaid')and disposition and((disposition.claims and disposition.claims[id])or(disposition.effects and disposition.effects[id]))
     local parent=EntityGetParent(e)
     if parent and parent~=0 then
         local root=parent;local own=false
@@ -552,6 +553,7 @@ local function unpaid_gold_to_world(e,who,id)
         ComponentSetValue2(c,'inventory_slot',-1,-1)
         EntitySetTransform(e,x,y);restore_world=true
     end
+    EntityAddTag(e,'ew_income_unpaid')
     if restore_world then
         -- Native pickup disables world components after the callback. Restore
         -- the ordinary world-drop representation of this identified unpaid
@@ -562,6 +564,43 @@ local function unpaid_gold_to_world(e,who,id)
     end
     ComponentSetValue2(c,'is_pickable',false)
     ComponentSetValue2(c,'next_frame_pickable',GameGetFrameNum()+15)
+end
+-- Noita may restore an attached player tree well before OnPlayerSpawned/
+-- ctx.ready. Use only existing body/recipient receipts and a read-only saved
+-- disposition here; never initialize accounting, stamp a body or move money.
+local function early_unpaid_gold()
+    if ctx.ready and mode then return end -- ordinary ready-state cleanup remains below
+    if mode and not mode.enabled then return end
+    if type(ctx.my_id)~='string'or ctx.my_id==''then return end
+    local e=ctx.my_player and ctx.my_player.entity
+    if not e or not EntityGetIsAlive(e)then return end
+    local r=body_receipt(e,false)
+    local run=r and ComponentGetValue2(r,'value_string')
+    if type(run)~='string'or run==''or string_value(e,'ew_income_receipt_owner_v2')~=ctx.my_id then return end
+    if mode and mode.run~=run then return end
+    local disposition=owner
+    if not disposition then
+        local raw=GlobalsGetValue('ew_income_owner_v1','')
+        if raw==''then return end
+        if raw~=early_owner_raw or not early_owner_data then
+            -- Globals/pages may still be arriving during startup. A partial
+            -- read retries without turning a transient load into a run pause.
+            local ok,saved=pcall(store.read,'ew_income_owner_v1')
+            if not ok or type(saved)~='table'then return end
+            early_owner_raw,early_owner_data=raw,saved
+        end
+        disposition=early_owner_data
+    else early_owner_raw,early_owner_data=nil,nil end
+    if disposition.version~=2 or disposition.run~=run then return end
+    local claims,effects=disposition.claims,disposition.effects
+    if(not claims or not next(claims))and(not effects or not next(effects))then return end
+    for _,gold in ipairs(EntityGetWithTag('gold_nugget')or{})do
+        local id=gid(gold)
+        if valid_id(id)and((claims and claims[id])or(effects and effects[id]))
+            and(EntityGetParent(gold)~=0 or EntityHasTag(gold,'ew_income_unpaid'))then
+            unpaid_gold_to_world(gold,e,id,disposition)
+        end
+    end
 end
 util.add_cross_call('ew_income_pickup',function(e,who)
     if mode and not mode.enabled then return false end
@@ -626,6 +665,7 @@ function M.on_local_player_spawn()
     ModSettingSet('quant.ew.income_session_serial',serial)
     nonce=ctx.my_id..':'..serial..':'..tostring(GameGetRealWorldTimeSinceStarted())
     owner.effects=owner.effects or{}
+    early_unpaid_gold()
     -- Migrate old retired requests conservatively: their credit/effects may
     -- still be outstanding, but they must never resume claim traffic.
     for id in pairs(owner.retired)do retire(id)end
@@ -645,6 +685,7 @@ end
 function M.on_local_player_polymorphed()if active()then bind(ctx.my_player.entity,true)end end
 function M.on_should_send_updates()if ctx.is_host then publish()end end
 function M.on_world_update()
+    early_unpaid_gold()
     if not ctx.ready or ctx.run_ended then feedback.clear();return end
     if mode and mode.enabled and mode.version==2 and not receipt_mismatch then
         if not receipt_prepared then prepare_receipt(mode.run,ctx.is_host and state and state.accounts[ctx.my_id]or status_account)end
@@ -763,6 +804,7 @@ function M.on_world_update()
     end
 end
 function M.on_world_update_post()
+    early_unpaid_gold()
     -- Native ItemComponent attachment can happen AFTER item_pickup returns.
     -- Revisit only identified unpaid shared gold before it is rendered/saved.
     if mode and mode.enabled then
