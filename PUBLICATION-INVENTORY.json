@@ -293,6 +293,10 @@
       "size": 7680,
       "sha256": "f7fabfd14957356ef1e8420a556d7951047c34ede45f8e0140b92b945a6242e4"
     },
+    "tests/test_income_unknown_mode_callback.py": {
+      "size": 9055,
+      "sha256": "b1effe10da3a7ef5b7301620c194cf8e12e30b7dc7ce97d26a30cf29eeb2ed8a"
+    },
     "tests/test_native_speed_manager.py": {
       "size": 6886,
       "sha256": "6ad17c0176ba96cc09d43cba77150880971ee6750bcf119634c1f419939c79b5"
@@ -1342,8 +1346,8 @@
       "sha256": "3ed29ee3669ce59fa8cada80c9fe7a1a5ae8d13d0edf288b96a0833c3ae55b4a"
     },
     "quant.ew/files/system/shared_income/shared_income.lua": {
-      "size": 49813,
-      "sha256": "e6625548b46b2938ecdd3e7b2425b06a9a41322d2ebdff148cabef5f63e156ac"
+      "size": 52282,
+      "sha256": "53ff949938479f0cf2382d99ea8c0ae6e982adbca8614832ae089f6f8fe88b7e"
     },
     "quant.ew/files/system/shiny_orb/append.lua": {
       "size": 119,
