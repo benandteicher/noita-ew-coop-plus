@@ -12,3 +12,5 @@ in PUBLICATION-INVENTORY.json and each release's provenance.json. The local cano
 
 Upstream MIT/Apache licenses, original attribution and source are retained. See LICENSE-MIT,
 LICENSE-APACHE, [upstream README](UPSTREAM-README.md), and THIRD-PARTY-NOTICES.txt.
+
+Stability revision: **1.9.17.1/build 6** supersedes unissued build 5 for the recovery-window body-replacement wallet-loss correction. See `docs/STABILITY_RECOVERY.md`. Local review only; no public Latest change.

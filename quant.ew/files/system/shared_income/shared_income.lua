@@ -7,6 +7,8 @@ local M,rpc={},net.new_rpc_namespace()
 local state,mode,owner,bound,receipt_mismatch
 local recovering,receipt_prepared,fresh_owner,nonce=false,false,false,nil
 local offers,sessions,challenge={},{},0
+local latest_offer,ready_token=0,nil
+local nonce_base,recovery_attempt=nil,0
 local status_account
 local request_due=-1000
 local persistence_error=false
@@ -41,7 +43,13 @@ end
 local function write(k,v)store.write(k,v)end
 local function save()if not persistence_error and ctx.is_host and state then write('ew_income_run_v1',state)end end
 local function save_owner()if not persistence_error and owner then write('ew_income_owner_v1',owner)end end
-local function active()return mode and mode.enabled and not receipt_mismatch and not recovering and not ctx.proxy_opt.share_gold end
+local function active()return mode and mode.enabled and(mode.version~=2 or receipt_prepared)and not receipt_mismatch and not recovering and not ctx.proxy_opt.share_gold end
+-- Recovery pauses delivery, not ownership of the validated body's wallet.
+-- Revival/polymorph can replace that body before resume_ready is delivered.
+local function wallet_ready()
+    return active()or(recovering and receipt_prepared and not receipt_mismatch and not persistence_error
+        and mode and mode.enabled and mode.version==2 and owner and owner.run==mode.run and not ctx.proxy_opt.share_gold)
+end
 local function gid(e)
     local physical,mine,logical
     for _,c in ipairs(EntityGetComponentIncludingDisabled(e,'VariableStorageComponent')or{})do
@@ -113,11 +121,16 @@ local function prepare_receipt(run,a)
         receipt_mismatch=true;GamePrint('Shared income paused: saved body has no recovery receipt. Restore a matching v2 body checkpoint or start a new run.');return false
     end
     owner.run=run;owner.version=2;owner.balance=ComponentGetValue2(c,'money')
-    owner.session=nil;receipt_prepared=true;recovering=true;stamp(e);save_owner()
+    owner.session=nil;latest_offer=0;ready_token=nil
+    receipt_prepared=true;recovering=true;bound=e;stamp(e);save_owner()
     return true
 end
 local function begin_recovery()
     if not receipt_prepared or receipt_mismatch or not mode or mode.version~=2 then return end
+    if not recovering then
+        recovery_attempt=recovery_attempt+1;nonce=nonce_base..':'..recovery_attempt
+        latest_offer=0;ready_token=nil;owner.session=nil;recovering=true;save_owner()
+    end
     request_due=GameGetFrameNum()
     rpc.resume(mode.run,nonce,owner.applied)
 end
@@ -126,8 +139,20 @@ local function capture(e)
     if c then local n=ComponentGetValue2(c,'money');if n~=nil and owner.balance~=n then owner.balance=n;save_owner()end end
 end
 local function bind(e,carry)
-    if not active()or not owner or not e or not EntityGetIsAlive(e)then return end
+    if not wallet_ready()or not owner or not e or not EntityGetIsAlive(e)then return end
     if bound~=e then
+        if owner.version==2 and bound then
+            -- Only a lifecycle notification may carry a verified bank into a
+            -- successor. An ordinary update must not stamp an unknown body.
+            local r=body_receipt(e,false);local peer=string_value(e,'ew_income_receipt_owner_v2')
+            local seq=r and ComponentGetValue2(r,'value_int')
+            if not carry or(r and(peer~=ctx.my_id or ComponentGetValue2(r,'value_string')~=owner.run
+                or not ledger.integer(seq,2147483647)or seq>owner.applied))or(not r and peer)then
+                receipt_mismatch=true
+                GamePrint('Shared income paused: body replacement receipt mismatch. Restore a matching paired checkpoint or start a new run.')
+                return
+            end
+        end
         if bound and EntityGetIsAlive(bound)then capture(bound)end
         if bound then owner.life=(owner.life or 0)+1 end
         local c=wallet(e)
@@ -221,6 +246,8 @@ end
 rpc.opts_reliable();rpc.opts_everywhere()
 function rpc.resume_offer(peer,run,client_nonce,offer,reason)
     if ctx.rpc_peer_id~=ctx.host_id or peer~=ctx.my_id or not mode or run~=mode.run or client_nonce~=nonce then return end
+    if not ledger.integer(offer,2147483647)or offer<latest_offer then return end
+    latest_offer=offer;ready_token=tostring(offer)..':'..client_nonce
     if reason then receipt_mismatch=true;recovering=true;GamePrint('Shared income paused: '..reason);return end
     rpc.resume_commit(run,client_nonce,offer,owner.applied)
 end
@@ -237,7 +264,7 @@ function rpc.resume_commit(run,client_nonce,offer,applied)
 end
 rpc.opts_reliable();rpc.opts_everywhere()
 function rpc.resume_ready(peer,run,client_nonce,token)
-    if ctx.rpc_peer_id~=ctx.host_id or peer~=ctx.my_id or not mode or run~=mode.run or client_nonce~=nonce or receipt_mismatch then return end
+    if ctx.rpc_peer_id~=ctx.host_id or peer~=ctx.my_id or not mode or run~=mode.run or client_nonce~=nonce or token~=ready_token or receipt_mismatch then return end
     owner.session=token;recovering=false;save_owner();bind(ctx.my_player.entity,false)
 end
 local function pickup_effect(t,native,claim)
@@ -687,8 +714,8 @@ end)
 ctx.cap.shared_income={
     enabled=active,
     separate_wallets=function()return mode and mode.enabled end,
-    before_change=function(e)if active()then bind(e,false);capture(e)end end,
-    after_change=function(e)if active()then bind(e,true)end end,
+    before_change=function(e)if wallet_ready()and bind(e,false)then capture(e)end end,
+    after_change=function(e)if wallet_ready()then bind(e,true)end end,
     chest=function(x,y,rx,ry,file,id)
         if not active()or not chest_files[file]then return false end
         rpc.chest_request(mode.run,id,{x=x,y=y,rx=rx,ry=ry,file=file});return true
@@ -700,6 +727,7 @@ function M.on_local_player_spawn()
     local serial=(tonumber(ModSettingGet('quant.ew.income_session_serial'))or 0)+1
     ModSettingSet('quant.ew.income_session_serial',serial)
     nonce=ctx.my_id..':'..serial..':'..tostring(GameGetRealWorldTimeSinceStarted())
+    nonce_base=nonce;recovery_attempt=0
     owner.effects=owner.effects or{}
     service_deferred_callbacks()
     early_unpaid_gold()
@@ -719,7 +747,7 @@ function M.on_local_player_spawn()
 end
 -- entity_changed() calls this for both polymorph directions. Carry the fresh
 -- bank instead of player_sync's older 37-frame last_money sample.
-function M.on_local_player_polymorphed()if active()then bind(ctx.my_player.entity,true)end end
+function M.on_local_player_polymorphed()if wallet_ready()then bind(ctx.my_player.entity,true)end end
 function M.on_should_send_updates()if ctx.is_host then publish()end end
 function M.on_world_update()
     service_deferred_callbacks()
@@ -729,7 +757,7 @@ function M.on_world_update()
         if not receipt_prepared then prepare_receipt(mode.run,ctx.is_host and state and state.accounts[ctx.my_id]or status_account)end
         if recovering and GameGetFrameNum()-request_due>=120 then begin_recovery()end
     end
-    if active()then bind(ctx.my_player.entity,false)end
+    if wallet_ready()then bind(ctx.my_player.entity,false)end
     for _,e in ipairs(EntityGetWithTag('ew_income_discard')or{})do EntityKill(e)end
     -- Reconstruct generation gates after chunk reload / module-local state loss.
     for _,e in ipairs(EntityGetWithTag('ew_income_gold')or{})do
@@ -861,7 +889,7 @@ function M.on_world_update_post()
             end
         end
     end
-    if active()and owner then bind(ctx.my_player.entity,false)end
+    if wallet_ready()and owner then bind(ctx.my_player.entity,false)end
     feedback.update()
 end
 local generators={

@@ -71,3 +71,7 @@ serialization CPU, not a guarantee about native frame rate or unrelated EW error
 Do not publish this candidate as gameplay Latest or deploy it automatically.
 Use the complete updater-compatible candidate for independent review and a fresh
 two-player playtest after reviewing its specific native results and limits.
+
+## Build 6 recovery-window body correction
+
+Build 5 is superseded by 1.9.17.1/build 6. A validated wallet and applied receipt now follow trusted revival/death/polymorph replacements even before readiness. Older same-run/recipient living receipts are valid restoration targets; incompatible or unannounced successors pause untouched. An unprepared v2 body cannot become active or inherit a global bank while its wallet is absent. Fresh recovery attempts use distinct nonces; stale offers/readiness cannot downgrade the current session. Payment delivery remains paused until the handshake succeeds. No balance adjustment or replay-cursor shortcut is used.
