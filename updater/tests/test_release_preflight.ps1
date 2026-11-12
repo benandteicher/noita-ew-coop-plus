@@ -73,4 +73,9 @@ Assert-Case 'draft-only and verified-tag flags remain in publisher' {
     $publisher = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'build-release.ps1')
     if ($publisher -notmatch 'release create.*--draft --latest=false --verify-tag' -or $publisher -match 'release edit|--force') { throw 'Unexpected publication policy.' }
 }
+Assert-Case 'superseded unpublished assets rejected before remote lookup' {
+    foreach ($tag in @('coopplus-v1.9.18.0-b7','coopplus-v1.9.18.1-b8','coopplus-v1.9.18.2-b9','coopplus-v1.9.18.3-b10','coopplus-v1.9.18.4-b11','coopplus-v1.9.18.5-b12','coopplus-v1.9.18.6-b13','coopplus-v1.9.18.7-b14','coopplus-v1.9.18.8-b15','coopplus-v1.9.18.9-b16')) {
+        Must-Fail { Assert-CoopPublishingTarget -GhPath 'unused-gh' -Repository 'benandteicher/noita-ew-coop-plus' -Tag $tag -SourceRevision $expected -Lookup { throw 'Must not perform a lookup for superseded assets' } } 'Superseded'
+    }
+}
 Write-Output "RESULT: $script:passed focused publishing cases passed; no GitHub mutations or binary rebuild."

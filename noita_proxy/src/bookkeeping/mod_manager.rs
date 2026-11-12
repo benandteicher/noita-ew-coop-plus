@@ -57,6 +57,7 @@ impl Modmanager {
         steam_state: Option<&mut SteamState>,
         args: &Args,
     ) {
+        crate::frozen_runtime::route_paths(paths);
         if let State::JustStarted = self.state {
             if let Some(path) = &args.exe_path {
                 if check_noita_exe_path_valid(path) {
@@ -134,7 +135,13 @@ impl Modmanager {
                 try_find_save_path(paths);
 
                 if let Some(path) = &paths.noita_save {
-                    info!("Trying to enable mod: {:?}", enable_mod(path));
+                    match enable_mod(path) {
+                        Err(error) if crate::frozen_runtime::ID.is_some() => {
+                            self.state = State::EyreErrorReport(eyre!("Cannot enable frozen mod in the configured private/profile save: {error}"));
+                            return;
+                        }
+                        result => info!("Trying to enable mod: {:?}", result),
+                    }
                 }
                 ui.label("Will check mod install now...");
                 self.state = State::CheckMod;
@@ -153,6 +160,9 @@ impl Modmanager {
                         State::EyreErrorReport(err)
                     }
                 }
+            }
+            State::ConfirmInstall if crate::frozen_runtime::ID.is_some() => {
+                ui.colored_label(eframe::egui::Color32::RED, "Frozen Co-op+ payload mismatch. Close the proxy and open the matching complete Co-op+ package. No official download or replacement is allowed.");
             }
             State::ConfirmInstall => {
                 let mod_path = paths.noita_quantew_install();
@@ -303,6 +313,12 @@ pub fn try_find_game_path(paths: &mut Paths, steam_state: Option<&SteamState>) {
 }
 
 pub fn try_find_save_path(paths: &mut Paths) {
+    if crate::frozen_runtime::private_root().is_some() {
+        crate::frozen_runtime::route_paths(paths);
+        return;
+    }
+    // Honor an explicitly configured profile, including portable installations.
+    if paths.noita_save.is_some() { return; }
     if cfg!(target_os = "windows") {
         // Noita uses AppData folder instead of %AppData%
         let appdata_path =

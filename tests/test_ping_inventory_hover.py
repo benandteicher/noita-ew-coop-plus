@@ -103,11 +103,11 @@ def native_fixture(data):
     f={os='Windows',abi=function(kind)return kind=='32bit'end,cdef=function()end}
     function f.cast(kind,value)
       if kind=='uintptr_t'then return addr(value)end
-      local width=(kind:find('char',1,true)and 1 or 4)
+      local width=(kind:find('char',1,true)and 1 or kind:find('short',1,true)and 2 or kind:find('long long',1,true)and 8 or 4)
       return pointer(addr(value),width,kind=='int32_t*')
     end
     function f.new(kind,initial)
-      local width=(kind:find('char',1,true)and 1 or 4)
+      local width=(kind:find('char',1,true)and 1 or kind:find('short',1,true)and 2 or kind:find('long long',1,true)and 8 or 4)
       local count=tonumber(kind:match('%[(%d+)%]'));local p=pointer(HEAP(count*width),width)
       if initial then p[0]=initial end;return p
     end
@@ -116,7 +116,11 @@ def native_fixture(data):
     function f.fill(p,size)WRITEMEM(addr(p),string.rep(string.char(0),size))end
     local kernel={}
     function kernel.GetModuleHandleA()return 0x400000 end
-    function kernel.GetModuleFileNameA(_,out)f.copy(out,'mock-noita.exe');return #'mock-noita.exe'end
+    function kernel.GetModuleFileNameW(_,out)for i=0,7 do out[i]=('mock.exe'):byte(i+1)end;out[8]=0;return 8 end
+    function kernel.CreateFileW()return 41 end
+    function kernel.GetFileSizeEx(_,out)out[0]=#EXE;return 1 end
+    function kernel.ReadFile(_,out,size,count)f.copy(out,EXE,size);count[0]=#EXE;return 1 end
+    function kernel.CloseHandle()return 1 end
     function kernel.GetCurrentProcess()return 1 end
     function kernel.FlushInstructionCache()return 1 end
     function kernel.VirtualQuery(p,out)
@@ -140,7 +144,6 @@ def native_fixture(data):
     function f.load(name)if name=='kernel32'then return kernel elseif name=='advapi32'then return crypt else return sdl end end
     local previous=require
     function require(name)if name=='ffi'then return f else return previous(name)end end
-    io.open=function()return {read=function()return EXE end,close=function()end}end
     backend=assert(loadstring(SOURCE))()
     ''')
     return lua,memory

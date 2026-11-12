@@ -19,6 +19,7 @@ constants = dofile_once("mods/quant.ew/files/core/constants.lua")
 ctx = dofile_once("mods/quant.ew/files/core/ctx.lua")
 util = dofile_once("mods/quant.ew/files/core/util.lua")
 net = dofile_once("mods/quant.ew/files/core/net.lua")
+local run_session = dofile_once("mods/quant.ew/files/core/run_session.lua")
 inventory_helper = dofile_once("mods/quant.ew/files/core/inventory_helper.lua")
 player_fns = dofile_once("mods/quant.ew/files/core/player_fns.lua")
 
@@ -209,6 +210,7 @@ function OnProjectileFired(
     multicast_index,
     unknown3
 )
+    if net.connection_lost or not run_session.ready() then return end
     ctx.hook.on_projectile_fired(
         shooter_id,
         projectile_id,
@@ -357,6 +359,7 @@ function OnProjectileFiredPost(
     multicast_index,
     unknown3
 )
+    if net.connection_lost or not run_session.ready() then return end
     if EntityHasTag(shooter_id, "ew_client") then
         local shooter_player_data = player_fns.get_player_data_by_local_entity_id(shooter_id)
         local vel = EntityGetFirstComponentIncludingDisabled(projectile_id, "VelocityComponent")
@@ -385,6 +388,7 @@ util.add_cross_call("ew_api_force_send_inventory", function()
 end)
 
 function OnPausedChanged(paused, is_wand_pickup)
+    if not run_session.ready() then return end
     ctx.is_paused = paused
     ctx.is_wand_pickup = is_wand_pickup
     if paused or is_wand_pickup then
@@ -408,7 +412,8 @@ function OnPausedChanged(paused, is_wand_pickup)
     end
 end
 
-function OnWorldInitialized() -- This is called once the game world is initialized. Doesn't ensure any world chunks actually exist. Use OnPlayerSpawned to ensure the chunks around player have been loaded or created.
+local pending_world_init, pending_player
+local function agreed_world_initialized()
     if ctx.is_host then
         GameAddFlagRun("ew_flag_this_is_host")
     else
@@ -417,11 +422,21 @@ function OnWorldInitialized() -- This is called once the game world is initializ
     ctx.hook.on_world_initialized()
 end
 
+function OnWorldInitialized()
+    pending_world_init = true
+    run_session.boundary("world")
+    if run_session.ready() then
+        pending_world_init = false
+        agreed_world_initialized()
+    end
+end
+
 local last_chunk
 
 local last_flex
 
-function OnPlayerSpawned(player_entity) -- This runs when player entity has been created
+local function agreed_player_spawned(player_entity)
+    if net.connection_lost then return end
     print("Initial player entity: " .. player_entity)
     if ctx.proxy_opt.home_on_players then
         EntityAddTag(player_entity, "homing_target")
@@ -500,6 +515,17 @@ function OnPlayerSpawned(player_entity) -- This runs when player entity has been
         end
     end
     inventory_helper.setup_inventory()
+end
+
+function OnPlayerSpawned(player_entity)
+    if net.connection_lost then return end
+    pending_player = player_entity
+    run_session.boundary("player")
+    if run_session.ready() then
+        if pending_world_init then pending_world_init = false; agreed_world_initialized() end
+        pending_player = nil
+        agreed_player_spawned(player_entity)
+    end
 end
 
 local last_n = 1
@@ -628,7 +654,16 @@ function OnWorldPreUpdate() -- This is called every time the game is about to st
         end
         return
     end
-    util.tpcall(on_world_pre_update_inner)
+    if not net.check_connection() then return end
+    if not run_session.pump(pending_player and "player" or "world") then return end
+    if pending_world_init then pending_world_init = false; agreed_world_initialized() end
+    if pending_player then
+        local player = pending_player
+        pending_player = nil
+        agreed_player_spawned(player)
+    end
+    local ok = util.tpcall(on_world_pre_update_inner)
+    if not ok then net.check_connection() end
     --[[if InputIsKeyJustDown(11) then
         local x, y = EntityGetTransform(ctx.my_player.entity)
         for _ = 1, 16 do
@@ -672,11 +707,12 @@ local function on_world_post_update_inner()
 end
 
 function OnWorldPostUpdate() -- This is called every time the game has finished updating the world
-    if net.connect_failed then
+    if net.connect_failed or not net.check_connection() or not run_session.ready() then
         return
     end
-    util.tpcall(on_world_post_update_inner)
+    local ok = util.tpcall(on_world_post_update_inner)
     ctx.events = {}
+    if not ok and not net.check_connection() then return end
     net.proxy_send("flush", "")
     ctx.finish()
 end
@@ -734,6 +770,7 @@ function OnModPostInit()
 end
 
 function OnPlayerDied(player_entity)
+    if net.connection_lost or not run_session.ready() then return end
     ctx.hook.on_player_died(player_entity)
     print("player died")
 end

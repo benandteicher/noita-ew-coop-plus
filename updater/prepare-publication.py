@@ -16,8 +16,8 @@ import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ROOT_FILES = {".gitignore", "Justfile", "LICENSE-APACHE", "LICENSE-MIT", "THIRD-PARTY-NOTICES.txt", "contributing.md", "flake.lock", "flake.nix"}
-SOURCE_ROOTS = {"quant.ew", "noita_proxy", "ewext", "noita_api", "shared", "ew_api_example", "docs", "nix", "redist", "extra", "updater"}
-BUILD_SCRIPTS = {"check_pre_ci.py", "ci_make_archives.py", "ci_version.py", "extract_steam_redist.py", "make_release_assets.py", "mat_colors.py", "parse_components.py", "parse_lua_api.py", "perf.sh", "prepare_release.py", "start-linux.sh", ".gitignore"}
+SOURCE_ROOTS = {"quant.ew", "noita_proxy", "ewext", "noita_api", "shared", "ew_api_example", "docs", "nix", "redist", "extra", "updater", "playtest"}
+BUILD_SCRIPTS = {"check_pre_ci.py", "ci_make_archives.py", "ci_version.py", "extract_steam_redist.py", "make_release_assets.py", "mat_colors.py", "parse_components.py", "parse_lua_api.py", "perf.sh", "prepare_release.py", "start-linux.sh", "generate_ping_vanilla_catalogue.py", ".gitignore"}
 DENIED_COMPONENTS = {".git", ".github", ".vscode", ".idea", "__pycache__", "node_modules", "target", "dist", "diagnostics", "verification", "save00", "save_shared", "save_state", "tmp"}
 DENIED_SUFFIXES = {".log", ".bin", ".wak", ".pak", ".zip", ".7z", ".mp4", ".mkv", ".avi", ".exe", ".pyc", ".dmp"}
 DENIED_NAMES = {".env", "credentials", "credentials.json", "hosts.yml", "settings.ron", "proxy-settings.ron", "mod_settings.bin", "logger.txt"}
@@ -35,7 +35,7 @@ def intended_source(name: str) -> bool:
         return False
     if pathlib.PurePosixPath(name).suffix.casefold() in DENIED_SUFFIXES or parts[-1].casefold() in DENIED_NAMES:
         return False
-    return name in ROOT_FILES or parts[0] in SOURCE_ROOTS or (parts[0] == "tests" and parts[-1].endswith((".py", ".lua"))) or (len(parts) == 2 and parts[0] == "scripts" and parts[1] in BUILD_SCRIPTS)
+    return name in ROOT_FILES or parts[0] in SOURCE_ROOTS or (parts[0] == "tests" and (parts[-1].endswith((".py", ".lua")) or name in {"tests/requirements.txt", "tests/settings_r14_contract.json"})) or (len(parts) == 2 and parts[0] == "scripts" and parts[1] in BUILD_SCRIPTS)
 
 
 def sha(data: bytes) -> str:
@@ -80,7 +80,8 @@ def collect(root=ROOT) -> tuple[dict[str, bytes], dict]:
     selected["README.md"] = b"""# Noita Entangled Worlds: Co-op+
 
 Personal Windows co-op fork of [IntQuant/noita_entangled_worlds](https://github.com/IntQuant/noita_entangled_worlds).
-The first updater candidate wraps the unchanged official v1.6.8 proxy and preserves the frozen R14 mod runtime.
+The isolated playtest and candidate normal update use an explicitly frozen matching Co-op+ Lua/proxy/DLL runtime.
+Recovery releases carry an explicitly inventoried known-good gameplay payload at a higher build number.
 
 See [updater setup and review](updater/README.md) and [release workflow](updater/PUBLICATION.md).
 Draft releases are for review and are not an anonymous update channel. Ordinary source commits never update clients.

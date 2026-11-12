@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -10,7 +11,7 @@ namespace CoopPlus {
     // The official GUI proxy explicitly AttachConsole(parent). A short-lived
     // detached parent prevents it keeping the updater's console alive.
     internal static class ProxyHandoff {
-        private sealed class Request { public string Exe; public string Directory; public string[] Arguments; }
+        private sealed class Request { public string NormalRoot; public string Exe; public string Directory; public string[] Arguments; }
         private sealed class Reply { public int Pid; public string Error; }
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         private struct StartupInfo { public int cb; public string reserved, desktop, title; public int x,y,xSize,ySize,xChars,yChars,fill,flags; public short show,reserved2; public IntPtr reservedPtr,input,output,error; }
@@ -23,13 +24,55 @@ namespace CoopPlus {
         [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetExitCodeProcess(IntPtr handle, out uint code);
         [DllImport("kernel32.dll", SetLastError = true)] private static extern bool TerminateProcess(IntPtr handle, uint code);
         private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
-        internal static int Launch(string executable, string directory, string[] args) {
+        private static string LocalAbsolute(string value) {
+            if(String.IsNullOrWhiteSpace(value) || value.Length<3 || !Char.IsLetter(value[0]) || value[1]!=':' || (value[2]!='\\' && value[2]!='/'))
+                throw new IOException("Normal Co-op+ launch requires explicit absolute local paths; open CoopPlus.exe.");
+            string path=Path.GetFullPath(value).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar);Program.Guard(path);return path;
+        }
+        internal static ProcessStartInfo NormalStart(string normalRoot,string executable,string directory,string[] args) {
+            string root=LocalAbsolute(normalRoot),proxy=Path.Combine(root,"current","proxy");
+            if(!String.Equals(LocalAbsolute(executable),Path.Combine(proxy,"noita_proxy.exe"),StringComparison.OrdinalIgnoreCase) || !String.Equals(LocalAbsolute(directory),proxy,StringComparison.OrdinalIgnoreCase))
+                throw new IOException("Normal proxy context does not match this managed Co-op+ installation.");
+            if(!File.Exists(Path.Combine(root,"CoopPlus.exe")) || !File.Exists(Path.Combine(root,"current","installed.json")) || !File.Exists(Path.Combine(root,"coopplus.json")))
+                throw new IOException("Normal Co-op+ context is incomplete; open the installed CoopPlus.exe.");
+            var config=Setup.Stored(root);
+            if(config==null || String.IsNullOrWhiteSpace(config.gameDir))throw new IOException("Normal Co-op+ game selection is missing.");
+            string game=LocalAbsolute(config.gameDir);Program.ValidateForwarded(root,game,proxy,args ?? new string[0]);
+            var all=new List<string>(args ?? new string[0]);
+            foreach(string option in new[]{"--settings-path","--save-state-path","--exe-path"}) {
+                int found=0;
+                for(int i=0;i<all.Count;i++) {
+                    bool equals=all[i].StartsWith(option+"=",StringComparison.Ordinal);string value=null;
+                    if(all[i]==option){if(++i>=all.Count)throw new IOException("Missing explicit "+option);value=all[i];}
+                    else if(equals)value=all[i].Substring(option.Length+1);
+                    if(value==null)continue;
+                    if(++found>1 || String.IsNullOrWhiteSpace(value))throw new IOException("Ambiguous explicit "+option);
+                    string absolute=LocalAbsolute(Path.IsPathRooted(value)?value:Path.Combine(proxy,value));
+                    if(option=="--exe-path") {
+                        if(!String.Equals(absolute,Path.Combine(game,"noita.exe"),StringComparison.OrdinalIgnoreCase) || !File.Exists(absolute))throw new IOException("Normal proxy game path differs from the managed selection.");
+                    } else Program.ValidateMutable(root,game,absolute);
+                    all[i]=equals?option+"="+absolute:absolute;
+                }
+                if(found!=1)throw new IOException("Normal proxy context requires explicit "+option);
+            }
+            var start=new ProcessStartInfo(executable,String.Join(" ",all.ConvertAll(Program.Quote))) {UseShellExecute=false,WorkingDirectory=proxy};
+            // The proof comes only from this gated dispatch/request, never an
+            // inherited normal/private context from the launcher's environment.
+            start.EnvironmentVariables.Remove("COOPPLUS_PRIVATE_ROOT");
+            start.EnvironmentVariables.Remove("COOPPLUS_PLAYTEST_SESSION");
+            start.EnvironmentVariables.Remove("COOPPLUS_PLAYTEST_SESSION_DIR");
+            start.EnvironmentVariables["COOPPLUS_NORMAL_ROOT"]=root;
+            start.EnvironmentVariables["NP_SKIP_MOD_CHECK"]="1";
+            return start;
+        }
+        internal static int Launch(string normalRoot,string executable, string directory, string[] args) {
+            NormalStart(normalRoot,executable,directory,args);
             string temp = Path.Combine(Path.GetTempPath(), "CoopPlus-Handoff-" + Guid.NewGuid().ToString("N"));
             Engine.AssertNoReparse(temp); Directory.CreateDirectory(temp);
             string request = Path.Combine(temp, "request.json"), reply = Path.Combine(temp, "reply.json");
             IntPtr worker = IntPtr.Zero;
             try {
-                File.WriteAllText(request, Json.Serialize(new Request { Exe = executable, Directory = directory, Arguments = args }), new UTF8Encoding(false));
+                File.WriteAllText(request, Json.Serialize(new Request { NormalRoot=normalRoot, Exe = executable, Directory = directory, Arguments = args }), new UTF8Encoding(false));
                 string self = Process.GetCurrentProcess().MainModule.FileName;
                 var startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)) }; ProcessInfo info;
                 if (!CreateProcess(self, new StringBuilder(Program.Quote(self) + " --internal-handoff " + Program.Quote(request)), IntPtr.Zero, IntPtr.Zero, false, 0x00000008, IntPtr.Zero, directory, ref startup, out info))
@@ -64,9 +107,9 @@ namespace CoopPlus {
             try {
                 Engine.AssertNoReparse(requestPath);
                 var request = Json.Deserialize<Request>(File.ReadAllText(requestPath));
+                if(request==null || String.IsNullOrWhiteSpace(request.NormalRoot))throw new IOException("Normal proxy handoff context is missing; open CoopPlus.exe.");
                 Engine.AssertNoReparse(request.Exe); Engine.AssertNoReparse(request.Directory);
-                var start = new ProcessStartInfo(request.Exe, String.Join(" ", Array.ConvertAll(request.Arguments, Program.Quote))) { UseShellExecute = false, WorkingDirectory = request.Directory };
-                start.EnvironmentVariables["NP_SKIP_MOD_CHECK"] = "1";
+                var start = NormalStart(request.NormalRoot,request.Exe,request.Directory,request.Arguments);
                 using (var proxy = Process.Start(start)) {
                     if (proxy.WaitForExit(900)) throw new IOException("The official proxy closed during startup (exit " + proxy.ExitCode + "). Check its ew_log.txt and launch arguments.");
                     File.WriteAllText(reply, Json.Serialize(new Reply { Pid = proxy.Id }), new UTF8Encoding(false));

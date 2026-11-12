@@ -213,6 +213,41 @@ fn decode_area(lua: LuaState) -> eyre::Result<ValuesOnStack> {
     Ok(ValuesOnStack(1))
 }
 
+/// Required local terrain fence. Returns (complete, remaining_blob_or_nil, loaded).
+/// Remaining contains only unresolved physical-solid targets, or the exact
+/// original for an unloaded chunk before any mutation. Resolved cells have
+/// final live readback and never appear as required in subsequent attempts.
+/// An all-Unknown mask is complete even unloaded: (true, nil, false).
+fn apply_terrain(lua: LuaState) -> eyre::Result<ValuesOnStack> {
+    let data_ptr = lua.to_integer(1) as *const u8;
+    let data_len = lua.to_integer(2) as usize;
+    if data_ptr.is_null() || data_len == 0 || data_len > 12 + 16384 * 5 {
+        bail!("apply_terrain got an invalid buffer length or pointer");
+    }
+    let outcome = ExtState::with_global(|state| {
+        let fns = state
+            .world_fns
+            .as_mut()
+            .ok_or_eyre("Native world decode is not initialized")?;
+        let pws = state
+            .particle_world_state
+            .as_mut()
+            .ok_or_eyre("Particle world state is not initialized")?;
+        // SAFETY: Lua retains the immutable packet string for this call. This
+        // synchronous callback runs on the game main thread before capture.
+        let data = unsafe { std::slice::from_raw_parts(data_ptr, data_len) };
+        unsafe { pws.apply_terrain(data, fns) }
+    })??;
+    lua.push_bool(outcome.remaining.is_none());
+    if let Some(blob) = outcome.remaining {
+        lua.push_raw_string(&blob);
+    } else {
+        lua.push_nil();
+    }
+    lua.push_bool(outcome.loaded);
+    Ok(ValuesOnStack(3))
+}
+
 fn encode_area(lua: LuaState) -> ValuesOnStack {
     let lua = lua.raw();
     let start_x = unsafe { LUA.lua_tointeger(lua, 1) } as i32;
@@ -373,6 +408,16 @@ fn netmanager_flush(_lua: LuaState) -> eyre::Result<()> {
     let mut binding = try_lock_netmanager()?;
     let netmanager = binding.as_mut().unwrap();
     netmanager.flush()
+}
+
+// Read-only presentation query. A failed socket never becomes a healthy idle
+// socket: actual I/O still returns errors, while Lua can stop later frame work
+// after displaying the original transport failure. No reconnect is attempted.
+fn netmanager_connection_error(_lua: LuaState) -> eyre::Result<Option<RawString>> {
+    let binding = try_lock_netmanager()?;
+    Ok(binding.as_ref().and_then(|manager| {
+        manager.terminal_cause().map(|cause| cause.as_bytes().to_vec().into())
+    }))
 }
 
 /*impl LuaFnRet for InitKV {
@@ -658,6 +703,7 @@ pub unsafe extern "C" fn luaopen_ewext(lua: *mut lua_State) -> c_int {
         add_lua_fn!(encode_area);
         add_lua_fn!(init_world_decode);
         add_lua_fn!(decode_area);
+        add_lua_fn!(apply_terrain);
         add_lua_fn!(make_ephemerial);
         add_lua_fn!(on_world_initialized);
         add_lua_fn!(test_fn);
@@ -668,6 +714,7 @@ pub unsafe extern "C" fn luaopen_ewext(lua: *mut lua_State) -> c_int {
         add_lua_fn!(netmanager_recv);
         add_lua_fn!(netmanager_send);
         add_lua_fn!(netmanager_flush);
+        add_lua_fn!(netmanager_connection_error);
 
         add_lua_fn!(module_on_world_init);
         add_lua_fn!(module_on_world_update);

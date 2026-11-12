@@ -1,3 +1,8 @@
+Frozen Co-op+ releases carry explicitly inventoried rebuilt components. Historical
+statements below about unchanged official binaries describe R14, not every later
+release. See each frozen release's provenance.json, Cargo license inventory and
+Microsoft VC runtime notice for its actual component hashes and terms.
+
 R14 retains the MIT-noticed native capture/augmentation and adapted spell-card geometry.
 Official v1.6.8 components remain unchanged. Upstream license and pinned revision follow.
 
@@ -29,3 +34,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 R8 retains the MIT-noticed shared capture/speed manager, preserves native CPU state and accounts for the speed row in native frame height. Native cards remain native. Only metadata/builders are distributed; verified game bytes are read locally at runtime.
+
+
+Existing application font notices
+This Co-op+ software uses the MiSans font. MiSans is subject to Xiaomi custom
+terms, not the project MIT/Apache licenses. Noto assets retain their OFL/Apache
+terms. See noita_proxy/assets/font/FONT-NOTICES.txt in source, and
+proxy/licenses/fonts/FONT-NOTICES.txt in installed packages, with full terms
+and exact font provenance. Do not redistribute these assets as a standalone font product.

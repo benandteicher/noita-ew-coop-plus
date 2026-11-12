@@ -25,12 +25,23 @@ async fn main() {
             AttachConsole(ATTACH_PARENT_PROCESS);
         }
     }
+    let mut args: Args = argh::from_env();
+    if let Err(reason) = noita_proxy::frozen_runtime::validate_entry_context(&args) {
+        noita_proxy::frozen_runtime::report_entry_error(&reason);
+        std::process::exit(1);
+    }
+    noita_proxy::frozen_runtime::configure(&mut args);
+    if let Err(reason) = noita_proxy::startup_diagnostics::init() {
+        noita_proxy::frozen_runtime::report_entry_error(&format!("Cannot retain startup diagnostics: {reason}"));
+        std::process::exit(1);
+    }
     let log = if let Ok(path) = std::env::current_exe() {
         path.parent().unwrap().join(paths::DEFAULT_PROXY_LOG_NAME)
     } else {
         paths::DEFAULT_PROXY_LOG_NAME.into()
     };
     if log.exists() {
+        noita_proxy::startup_diagnostics::archive_previous_log(&log);
         let _ = fs::copy(
             log.clone(),
             log.clone()
@@ -85,12 +96,12 @@ async fn main() {
 
         let trace = backtrace::Backtrace::force_capture();
         error!("Backtrace: {}", trace);
+        noita_proxy::startup_diagnostics::failure("panic", &format!("{info}\n{trace}"));
     }));
-
-    let args: Args = argh::from_env();
 
     info!("Launch command: {:?}", args.launch_cmd);
 
+    let outcome = panic::catch_unwind(panic::AssertUnwindSafe(|| {
     if let Some(host) = args.clone().host {
         let bind_addr = if host.eq_ignore_ascii_case("steam") {
             None
@@ -108,9 +119,11 @@ async fn main() {
                 .map(Some)
                 .expect("host argument is neither SocketAddr nor port")
         };
-        host_cli(bind_addr, args)
+        host_cli(bind_addr, args);
+        Ok(())
     } else if let Some(lobby) = args.clone().lobby {
-        connect_cli(lobby, args)
+        connect_cli(lobby, args);
+        Ok(())
     } else {
         let icon = image::load_from_memory(include_bytes!("../assets/icon.png"))
             .unwrap()
@@ -127,11 +140,23 @@ async fn main() {
                     .with_min_inner_size([800.0, 600.0])
                     .with_inner_size([1200.0, 800.0])
                     .with_icon(icon)
-                    .with_title("Noita Entangled Worlds Proxy"),
+                    .with_title(noita_proxy::frozen_runtime::label()),
                 ..Default::default()
             },
             Box::new(|cc| Ok(Box::new(App::new(cc, args)))),
-        )
-        .unwrap()
+        ).map_err(|error| error.to_string())
+    }
+    }));
+    match outcome {
+        Ok(Ok(())) => noita_proxy::startup_diagnostics::event("process-return", "Main event loop returned. This alone does not prove a user-requested close."),
+        Ok(Err(error)) => {
+            noita_proxy::startup_diagnostics::failure("native-window-error", &error);
+            noita_proxy::startup_diagnostics::report_normal_failure(&error);
+            std::process::exit(1);
+        }
+        Err(_) => {
+            noita_proxy::startup_diagnostics::report_normal_failure("The proxy panicked. The first failure and backtrace were retained.");
+            std::process::exit(101);
+        }
     }
 }

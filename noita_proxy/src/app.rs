@@ -1,6 +1,6 @@
 use std::{
     fmt::Display,
-    fs, mem,
+    mem,
     net::SocketAddr,
     path::PathBuf,
     process::exit,
@@ -36,6 +36,7 @@ use crate::{
         self_restart::SelfRestarter,
         self_update,
         settings::Settings,
+        run_settings::{SavedRunSettings,SessionRules},
     },
     cli::Args,
     lang::{set_current_locale, tr},
@@ -53,6 +54,90 @@ use crate::{
     util::steam_helper::LobbyExtraData,
 };
 use crate::{DEFAULT_PORT, lang::LANGS};
+
+#[path = "log_reader.rs"]
+mod log_reader;
+use log_reader::LogReader;
+
+fn show_log_context(ui: &mut Ui, id: egui::Id, text: &str, max_height: f32) {
+    let mut target = None;
+    ui.horizontal(|ui| {
+        if ui.small_button("Start").clicked() { target = Some(egui::Align::TOP); }
+        if ui.small_button("End").clicked() { target = Some(egui::Align::BOTTOM); }
+    });
+    ScrollArea::vertical()
+        .id_salt(id)
+        .max_height(max_height)
+        .min_scrolled_height(0.0)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            let start = ui.cursor().min;
+            ui.add(egui::Label::new(RichText::new(text).monospace()).wrap());
+            if let Some(target) = target {
+                if target == egui::Align::TOP {
+                    ui.scroll_to_rect(Rect::from_min_size(start, Vec2::ZERO), Some(target));
+                } else {
+                    ui.scroll_to_cursor(Some(target));
+                }
+            }
+        });
+}
+
+fn show_log(ui: &mut Ui, log: &LogReader, clipboard: &mut Option<Clipboard>) {
+    ui.label("Partial capture: recent 256 KiB / 4096 lines; lines limited to 4096 bytes. First general and first specific communication contexts: up to 16 KiB / 9 lines each. Earlier runs are not retained. This view does not modify the log files.");
+    ui.label(log.source_path().display().to_string());
+    ui.label(format!(
+        "Generation {} · source {} bytes · capture {} bytes · about {} older bytes omitted",
+        log.generation,
+        log.source_len(),
+        log.retained_bytes(),
+        log.omitted_bytes
+    ));
+    if log.catching_up() {
+        ui.label("Reading recent output and scanning for the first failure in bounded steps…");
+    }
+    if log.invalid_utf8 {
+        ui.label("Invalid UTF-8 is displayed with replacement characters; other log output remains available.");
+    }
+    if let Some(error) = &log.error {
+        ui.colored_label(Color32::LIGHT_RED, error);
+    }
+    // Keep two expanded contexts from consuming the recent log's viewport,
+    // including at the 800x600 minimum with the 230px players sidebar.
+    let context_height = (ui.available_height() * 0.16).clamp(32.0, 80.0);
+    if let Some(failure) = &log.first_failure {
+        ui.collapsing(format!("First failure-like context found by sequential scan (generation {}; heuristic match)", failure.generation), |ui| {
+            show_log_context(ui, egui::Id::new(("general_log_context", failure.generation, failure.byte_offset)), &failure.text, context_height);
+        });
+    }
+    if let Some(failure) = &log.first_communication_failure {
+        ui.collapsing(format!("First specific communication failure observed (generation {}, byte {}; heuristic match)", failure.generation, failure.byte_offset), |ui| {
+            if !failure.earlier_scanned {
+                ui.label(if failure.generation == log.generation {
+                    "Provisional: earlier bytes have not yet been verified. The sequential scan may find an earlier communication failure."
+                } else {
+                    "Provisional: this earlier log generation ended before its earlier bytes were verified."
+                });
+            }
+            show_log_context(ui, egui::Id::new(("communication_log_context", failure.generation, failure.byte_offset)), &failure.text, context_height);
+        });
+    }
+    if ui.add_enabled(clipboard.is_some(), Button::new("Copy partial capture")).clicked()
+        && let Some(clipboard) = clipboard.as_mut()
+    {
+        let _ = clipboard.set_text(log.capture_text());
+    }
+    // Virtualized, unwrapped lines: unchanged frames lay out visible rows only.
+    let height = ui.text_style_height(&egui::TextStyle::Monospace);
+    ScrollArea::both()
+        .auto_shrink([false; 2])
+        .stick_to_bottom(true)
+        .show_rows(ui, height, log.row_count(), |ui, rows| {
+            for row in rows {
+                ui.add(egui::Label::new(RichText::new(log.row(row)).monospace()).extend());
+            }
+        });
+}
 
 enum AppState {
     Connect,
@@ -149,16 +234,19 @@ pub struct App {
     show_lobby_list: bool,
     map: ImageMap,
     refresh_timer: time::Instant,
-    noitalog_number: usize,
-    noitalog: Vec<String>,
-    proxylog: String,
+    noitalog: LogReader,
+    proxylog: LogReader,
     clipboard: Option<Clipboard>,
     paths: Paths,
+    new_run_intent: bool,
+    legacy_startup_settings: GameSettings,
+    settings_save_error: Option<String>,
+    user_close_reported: bool,
 }
 
 impl Drop for App {
     fn drop(&mut self) {
-        self.set_settings()
+        self.set_settings();
     }
 }
 impl App {
@@ -179,6 +267,8 @@ impl App {
         paths.proxy_settings = Some(save_paths.settings_path.clone());
         paths.proxy_save_state = Some(save_paths.save_state_path.clone());
         paths.steam_install = paths::get_steam_install();
+        crate::frozen_runtime::route_paths(&mut paths);
+        if crate::frozen_runtime::private_root().is_some() { saved_state.spacewars = false; }
         saved_state.times_started += 1;
 
         if paths.noita_exe.is_some() {
@@ -236,6 +326,7 @@ impl App {
             RgbaImage::new(7, 17)
         };
 
+        let legacy_startup_settings=saved_state.game_settings.clone();
         let mut me = Self {
             state,
             audio,
@@ -259,11 +350,11 @@ impl App {
             show_lobby_list: false,
             map: Default::default(),
             refresh_timer: time::Instant::now(),
-            noitalog_number: 0,
-            noitalog: Vec::new(),
-            proxylog: String::new(),
+            noitalog: LogReader::default(),
+            proxylog: LogReader::default(),
             clipboard: Clipboard::new().ok(),
             paths,
+            new_run_intent:false,legacy_startup_settings,settings_save_error:None,user_close_reported:false,
         };
 
         if let Some(connect_to) = me.args.auto_connect_to {
@@ -273,7 +364,7 @@ impl App {
         me
     }
 
-    fn set_settings(&self) {
+    fn set_settings(&mut self)->bool {
         let mut audio = self.audio.clone();
         audio.input_devices.clear();
         audio.output_devices.clear();
@@ -286,8 +377,8 @@ impl App {
         }
         .save(self.paths.proxy_settings());
         match result {
-            Ok(()) => (),
-            Err(e) => error!("Failed to save settings: {e}"),
+            Ok(()) => {self.settings_save_error=None;true},
+            Err(e) => {error!("Failed to save settings: {e}");crate::startup_diagnostics::failure("settings-save-failed",&e.to_string());self.settings_save_error=Some(format!("Settings were not saved: {e}. Retry before closing or creating a lobby."));false},
         }
     }
 
@@ -319,7 +410,7 @@ impl App {
 
         NetManagerInit {
             my_nickname,
-            save_state: self.run_save_state.clone(),
+            save_state: if self.new_run_intent {self.run_save_state.for_new_run()}else{self.run_save_state.for_session()},
             cosmetics,
             paths,
             player_png_desc: PlayerPngDesc {
@@ -364,6 +455,7 @@ impl App {
     }
 
     fn start_server(&mut self) {
+        if crate::frozen_runtime::ID.is_some() { self.notify_error("This frozen Co-op+ runtime requires Steam host/join for matching-peer checks."); return; }
         let bind_addr = SocketAddr::new("::".parse().unwrap(), DEFAULT_PORT);
         let peer = Peer::host(bind_addr, None).unwrap();
         let netman = NetManager::new(
@@ -371,34 +463,34 @@ impl App {
             self.get_netman_init(),
             self.audio.clone(),
         );
-        self.set_netman_settings(&netman);
+        if let Err(error)=self.set_netman_settings(&netman){self.notify_error(error);return;}
         self.change_state_to_netman(
             netman,
             self.paths.noita_quantew_player_spritesheet().clone(),
         );
     }
 
-    fn set_netman_settings(&mut self, netman: &Arc<NetManager>) {
-        let run_info: Option<RunInfo> = self.run_save_state.load();
-        let mut settings = netman.settings.lock().unwrap();
-        *settings = self.app_saved_state.game_settings.clone();
-        if !self.app_saved_state.game_settings.use_constant_seed {
-            if let Some(info) = run_info {
-                settings.seed = info.seed;
-                info!("Using saved seed: {}", settings.seed);
-            } else {
-                settings.seed = rand::random();
-                info!("Using random seed: {}", settings.seed);
-            }
-        } else {
-            info!("Using constant seed: {}", settings.seed);
-        }
-        settings.progress =
+    fn host_settings_selection(&self)->std::io::Result<(GameSettings,SessionRules)> {
+        let run_info: Option<RunInfo> = if self.new_run_intent{None}else{self.run_save_state.load_checked()?};
+        let mut active=self.app_saved_state.game_settings.clone();let session;
+        if let Some(info)=run_info {
+            if let Some(saved)=SavedRunSettings::load(self.run_save_state.directory(),info.seed)? {active=saved.settings.clone();session=SessionRules::from_saved(&saved);}
+            else {active=self.legacy_startup_settings.clone();active.seed=info.seed;session=SessionRules::legacy();info!("Legacy Continue: preserving startup proxy preferences; historical run rules are unverified");}
+        } else {if !active.use_constant_seed{active.seed=rand::random();}session=SessionRules::default();}
+        info!("Authoritative host rules selected: mode={} seed={} legacy_unverified={}",active.game_mode.unwrap_or(DefaultSettings::default().game_mode),active.seed,session.legacy_unverified);
+        crate::startup_diagnostics::event("host-settings-selected",&format!("mode={} seed={} legacy_unverified={} new_intent={}",active.game_mode.unwrap_or(DefaultSettings::default().game_mode),active.seed,session.legacy_unverified,self.new_run_intent));
+        active.progress =
             mod_manager::get_progress(self.paths.noita_save.as_deref()).unwrap_or_default();
-        *netman.pending_settings.lock().unwrap() = settings.clone();
+        Ok((active,session))
+    }
+    fn set_netman_settings(&mut self, netman: &Arc<NetManager>)->std::io::Result<()> {
+        let (active,session)=self.host_settings_selection()?;
+        *netman.settings.lock().unwrap()=active.clone();*netman.pending_settings.lock().unwrap()=active;
+        *netman.session_rules.lock().unwrap()=session;netman.apply_host_preferences(&self.app_saved_state.game_settings);Ok(())
     }
 
     fn start_connect(&mut self, addr: SocketAddr) {
+        if crate::frozen_runtime::ID.is_some() { self.notify_error("This frozen Co-op+ runtime requires Steam host/join for matching-peer checks."); return; }
         let peer = Peer::connect(addr, None).unwrap();
         self.state = AppState::TangledConnecting { peer };
     }
@@ -416,6 +508,7 @@ impl App {
     }
 
     fn start_steam_host(&mut self) {
+        let (active,_)=match self.host_settings_selection(){Ok(value)=>value,Err(error)=>{self.notify_error(error);return;}};
         let lobby_type = if self.app_saved_state.public_lobby {
             steamworks::LobbyType::Public
         } else if self.app_saved_state.allow_friends {
@@ -423,21 +516,20 @@ impl App {
         } else {
             steamworks::LobbyType::Private
         };
-        let peer = steam_networking::SteamPeer::new_host(
+        let peer = match steam_networking::SteamPeer::new_host(
             lobby_type,
             self.steam_state.as_ref().unwrap().client.clone(),
-            self.app_saved_state
-                .game_settings
+            active
                 .max_players
                 .unwrap_or(DefaultSettings::default().max_players),
-            self.make_lobby_extra_data(),
-        );
+            LobbyExtraData {name:self.nickname(),game_mode:Some(active.game_mode.unwrap_or(DefaultSettings::default().game_mode))},
+        ){Ok(peer)=>peer,Err(error)=>{self.notify_error(error);return;}};
         let netman = NetManager::new(
             PeerVariant::Steam(peer),
             self.get_netman_init(),
             self.audio.clone(),
         );
-        self.set_netman_settings(&netman);
+        if let Err(error)=self.set_netman_settings(&netman){self.notify_error(error);return;}
         self.change_state_to_netman(
             netman,
             self.paths.noita_quantew_player_spritesheet().clone(),
@@ -445,28 +537,25 @@ impl App {
     }
 
     fn make_lobby_extra_data(&self) -> LobbyExtraData {
+        let mode=if let AppState::ConnectedLobby{netman,..}=&self.state {netman.settings.lock().unwrap().game_mode}else{self.app_saved_state.game_settings.game_mode};
         LobbyExtraData {
             name: self.nickname(),
-            game_mode: Some(
-                self.app_saved_state
-                    .game_settings
-                    .game_mode
-                    .unwrap_or(DefaultSettings::default().game_mode),
-            ),
+            game_mode: Some(mode.unwrap_or(DefaultSettings::default().game_mode)),
         }
     }
 
     fn notify_error(&mut self, error: impl Display) {
+        crate::startup_diagnostics::event("ui-error",&error.to_string());
         self.state = AppState::Error {
             message: error.to_string(),
         }
     }
 
     fn start_steam_connect(&mut self, id: LobbyId) {
-        let peer = steam_networking::SteamPeer::new_connect(
+        let peer = match steam_networking::SteamPeer::new_connect(
             id,
             self.steam_state.as_ref().unwrap().client.clone(),
-        );
+        ){Ok(peer)=>peer,Err(error)=>{self.notify_error(error);return;}};
 
         let netman = NetManager::new(
             PeerVariant::Steam(peer),
@@ -559,8 +648,10 @@ impl App {
                                 self.show_host_settings = !self.show_host_settings
                             }
                             if self.show_host_settings {
-                                self.app_saved_state.game_settings.show_editor(ui, true)
+                                ui.label(if self.run_save_state.has_run_info() && !self.new_run_intent{"Next-run preferences. Continue keeps the recorded/current run rules."}else{"These host settings apply to the first game; no proxy restart is needed."});
+                                if self.app_saved_state.game_settings.show_editor(ui, true){self.set_settings();}
                             }
+                            if let Some(error)=&self.settings_save_error{ui.colored_label(Color32::LIGHT_RED,error);}
                             if ui.button("Show audio settings").clicked() {
                                 self.show_audio_settings = !self.show_audio_settings
                             }
@@ -623,7 +714,7 @@ impl App {
                                 let mut shown_anything = false;
                                 for id in lobby_ids.iter() {
                                     let info = steam_state.lobby_info(*id);
-                                    if info.version != Some(Version::current()) {
+                                    if info.version != Some(crate::frozen_runtime::peer_version()) {
                                         continue;
                                     }
                                     shown_anything = true;
@@ -652,7 +743,7 @@ impl App {
                                         ui.horizontal(|ui| {
                                             let mut enabled = false;
                                             if let Some(version) = info.version {
-                                                enabled = version == Version::current();
+                                                enabled = version == crate::frozen_runtime::peer_version();
                                                 let color = if enabled {
                                                     Color32::GRAY
                                                 } else {
@@ -732,8 +823,7 @@ impl App {
         match &self.steam_state {
             Ok(_) => {
                 if ui.button(tr("connect_steam_create")).clicked() {
-                    self.set_settings();
-                    self.start_steam_host();
+                    if self.set_settings(){self.start_steam_host();}
                 }
                 ui.checkbox(
                     &mut self.app_saved_state.public_lobby,
@@ -938,7 +1028,7 @@ impl App {
     }
 
     fn switch_to_connect(&mut self) {
-        self.state = if self.run_save_state.has_savestate() {
+        self.state = if self.run_save_state.has_run_info() {
             AppState::AskSavestateReset
         } else {
             AppState::Connect
@@ -954,6 +1044,7 @@ impl App {
             panic!("Called in incorrect state");
         };
         let mut goto_menu = false;
+        let mut settings_changed=false;
         let stopped = netman.stopped.load(Ordering::Relaxed);
         let accept_local = netman.accept_local.load(Ordering::Relaxed);
         let local_connected = netman.local_connected.load(Ordering::Relaxed);
@@ -978,6 +1069,16 @@ impl App {
             });
         let mut update_lobby_data = false;
         egui::CentralPanel::default().show(ctx, |ui| {
+            {
+                let session=netman.session_rules.lock().unwrap();let active=netman.settings.lock().unwrap();
+                ui.label(format!("Current host mode: {}",active.game_mode.unwrap_or(DefaultSettings::default().game_mode)));
+                if let Some(error)=&session.failure{ui.colored_label(Color32::LIGHT_RED,error);}
+                else if session.legacy_unverified {ui.colored_label(Color32::YELLOW,"Legacy run: historical rules are unverified. The original saved proxy preferences remain locked for Continue.");}
+                else if session.game_received {ui.colored_label(Color32::GREEN,"Game-received health mode and proxy run identity agree.");}
+                else if session.locked {ui.colored_label(Color32::YELLOW,"Proxy host settings locked/sent; waiting for the actual Noita world boundary.");}
+                else {ui.label("Host can still change the first game's rules. Clients wait until the host's actual Noita world agrees.");}
+            }
+            if let Some(error)=&self.settings_save_error{ui.colored_label(Color32::LIGHT_RED,error);}
             ui.horizontal(|ui| {
                 let last = self.connected_menu;
                 ui.selectable_value(&mut self.connected_menu, ConnectedMenu::Normal, "Lobby");
@@ -1020,16 +1121,7 @@ impl App {
                     ui.selectable_value(&mut self.connected_menu, ConnectedMenu::Mods, "Mod List");
                 }
                 if last == ConnectedMenu::Settings && last != self.connected_menu {
-                    let new_settings = self.app_saved_state.game_settings.clone();
-                    *netman.pending_settings.lock().unwrap() = new_settings.clone();
-                    update_lobby_data = true;
-                    let mut old_settings = netman.settings.lock().unwrap().clone();
-                    old_settings.progress.clear();
-                    old_settings.seed = new_settings.seed;
-                    old_settings.world_num = new_settings.world_num;
-                    netman
-                        .dirty
-                        .store(old_settings != new_settings, Ordering::Relaxed)
+                    if netman.peer.is_host(){netman.apply_host_preferences(&self.app_saved_state.game_settings);update_lobby_data=true;}
                 }
                 ui.add_space(ui.available_width() - 56.0);
                 if ui.button("Back out").clicked() {
@@ -1039,24 +1131,19 @@ impl App {
             ui.separator();
             if stopped {
                 ui.colored_label(Color32::LIGHT_RED, "Netmanager thread has stopped");
-                if let Some(err) = netman.error.lock().unwrap().as_ref() {
+                if let Some(err) = netman.error.lock().unwrap_or_else(|poison|poison.into_inner()).as_ref() {
                     ui.label("With the following error:");
                     ui.label(err.to_string());
                 }
                 ui.separator();
             }
-            if let Some(game) = self.paths.noita_exe().parent()
-                && let Ok(s) = fs::read_to_string(game.join("logger.txt")) {
-                    let l = self.noitalog.len();
-                    if l != 0 && s.len() >= self.noitalog[l - 1].len() {
-                        if s.len() != self.noitalog[l - 1].len() {
-                            self.noitalog[l - 1] = s
-                        }
-                    } else {
-                        self.noitalog_number = self.noitalog.len();
-                        self.noitalog.push(s);
-                    }
-                }
+            if let Some(game) = self.paths.noita_exe().parent() {
+                self.noitalog.poll_if_due(&game.join("logger.txt"));
+            }
+            let proxy_log_path = std::env::current_exe().ok()
+                .and_then(|path|path.parent().map(|p|p.join(paths::DEFAULT_PROXY_LOG_NAME)))
+                .unwrap_or_else(||paths::DEFAULT_PROXY_LOG_NAME.into());
+            self.proxylog.poll_if_due(&proxy_log_path);
             match self.connected_menu {
                 ConnectedMenu::Normal => {
                     if netman.peer.is_steam() {
@@ -1098,6 +1185,7 @@ impl App {
                                 let start_auto = self.can_start_automatically
                                     && self.app_saved_state.start_game_automatically;
                                 if start_auto || ui.button(tr("launcher_start_game")).clicked() {
+                                    if netman.prepare_game_launch().is_err(){return;}
                                     info!("Starting the game now");
                                     token.start_game(
                                         netman.actual_noita_port.load(Ordering::Relaxed),
@@ -1173,7 +1261,9 @@ impl App {
                 ConnectedMenu::Settings => {
                     ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                         if netman.peer.is_host() {
-                            self.app_saved_state.game_settings.show_editor(ui, true);
+                            let locked=netman.session_rules.lock().unwrap().locked;
+                            ui.label(if locked{"Next run: edits below are queued until the run ends. Restarting the proxy or choosing Noita New Game does not apply them."}else{"First game: changes below apply now. No restart or end-run is required."});
+                            if self.app_saved_state.game_settings.show_editor(ui, true){netman.apply_host_preferences(&self.app_saved_state.game_settings);update_lobby_data=true;settings_changed=true;}
                         } else {
                             netman.settings.lock().unwrap().show_editor(ui, false);
                         }
@@ -1223,52 +1313,10 @@ impl App {
                     }
                 }
                 ConnectedMenu::NoitaLog => {
-                    if !self.noitalog.is_empty() {
-                        let mut s = self.noitalog[self.noitalog_number].clone() + "\n";
-                        ui.horizontal(|ui| {
-                            let l = self.noitalog.len();
-                            if l > 1 {
-                                ui.add(Slider::new(&mut self.noitalog_number, 0..=l - 1));
-                            }
-                            if let Some(clipboard) = self.clipboard.as_mut()
-                                && ui.button("save to clipboard").clicked() {
-                                    let _ = clipboard.set_text(&s);
-                                }
-                        });
-                        ScrollArea::vertical()
-                            .auto_shrink([false; 2])
-                            .stick_to_bottom(true)
-                            .show(ui, |ui| {
-                                ui.add(
-                                    egui::TextEdit::multiline(&mut s)
-                                        .font(egui::TextStyle::Monospace)
-                                        .desired_width(f32::INFINITY)
-                                        .lock_focus(true),
-                                );
-                            });
-                    }
+                    show_log(ui, &self.noitalog, &mut self.clipboard);
                 }
                 ConnectedMenu::ProxyLog => {
-                    if let Ok(s) = fs::read_to_string(if let Ok(path) = std::env::current_exe() {
-                        path.parent().unwrap().join(paths::DEFAULT_PROXY_LOG_NAME)
-                    } else {
-                        paths::DEFAULT_PROXY_LOG_NAME.into()
-                    })
-                        && s.len() > self.proxylog.len() {
-                            self.proxylog = s
-                        }
-                    let mut s = self.proxylog.clone() + "\n";
-                    ScrollArea::vertical()
-                        .auto_shrink([false; 2])
-                        .stick_to_bottom(true)
-                        .show(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::multiline(&mut s)
-                                    .font(egui::TextStyle::Monospace)
-                                    .desired_width(f32::INFINITY)
-                                    .lock_focus(true),
-                            );
-                        });
+                    show_log(ui, &self.proxylog, &mut self.clipboard);
                 }
             }
             if self.app_saved_state.show_extra_debug_stuff {
@@ -1291,11 +1339,16 @@ impl App {
         if goto_menu {
             self.state = AppState::Connect;
         }
+        if settings_changed{self.set_settings();}
     }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        if !self.user_close_reported && ctx.input(|input|input.viewport().close_requested()) {
+            self.user_close_reported=true;
+            crate::startup_diagnostics::event("user-close-request","proxy window close requested");
+        }
         ctx.request_repaint_after(Duration::from_millis(500));
         match &mut self.state {
             AppState::Connect => {
@@ -1384,13 +1437,18 @@ impl eframe::App for App {
                     .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(ctx, |ui| {
                         ui.label(tr("savestate_desc"));
+                        if self.run_save_state.load_checked::<RunInfo>().ok().flatten().is_some_and(|info|SavedRunSettings::load(self.run_save_state.directory(),info.seed).ok().flatten().is_none()) {
+                            ui.colored_label(Color32::YELLOW,format!("Legacy checkpoint: historical proxy rules were not recorded. Continue keeps this startup's saved proxy preferences ({}) and remains unverified; it will not apply newly queued edits. Confirm these were the run's rules before continuing.",self.legacy_startup_settings.game_mode.unwrap_or(DefaultSettings::default().game_mode)));
+                        }
+                        ui.label("Preparing a new proxy run keeps the old proxy checkpoint until an actual new Noita world agrees. Noita New Game and proxy Continue are separate choices; save both PCs before switching.");
                         ui.horizontal(|ui| {
                             if ui.button(tr("Continue")).clicked() {
+                                self.new_run_intent=false;
                                 self.state = AppState::Connect;
                             }
                             if ui.button(tr("New-game")).clicked() {
+                                self.new_run_intent=true;
                                 self.state = AppState::Connect;
-                                self.run_save_state.reset();
                             }
                         });
                     });
@@ -1422,9 +1480,10 @@ impl eframe::App for App {
                         "Mismathing modes: Host is in {:?} mode, you're in {:?} mode",
                         target_lobby.kind, self.my_lobby_kind
                     ));
-                    button_restart = ui
+                    if crate::frozen_runtime::ID.is_some() && target_lobby.kind!=LobbyKind::Steam {ui.colored_label(Color32::LIGHT_RED,"This frozen Co-op+ runtime requires a matching Steam lobby. Switching to GOG mode is unsupported; settings and saved runs were retained.");}
+                    else {button_restart = ui
                         .add(Button::new(tr("Switch-mode-and-restart")).fill(Color32::RED))
-                        .clicked();
+                        .clicked();}
                     button_back = ui.button(tr("button_back")).clicked();
                 });
                 if button_restart {
@@ -1442,7 +1501,7 @@ impl eframe::App for App {
         };
     }
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
-        self.set_settings()
+        self.set_settings();
     }
 }
 
@@ -1665,4 +1724,268 @@ fn peer_role(peer: OmniPeerId, netman: &Arc<NetManager>) -> String {
     } else {
         tr("player_player")
     }
+}
+
+#[cfg(test)]
+mod log_ui_tests {
+    use super::*;
+    use std::{fs, io::Write, path::PathBuf, sync::atomic::{AtomicU64, Ordering as AtomicOrdering}};
+    use egui::{CentralPanel, RawInput, epaint::Shape};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    struct LogFixture { dir: PathBuf, path: PathBuf }
+    impl LogFixture {
+        fn new(bytes: &[u8]) -> Self {
+            let dir = std::env::temp_dir().join(format!("ew-log-ui-{}-{}", std::process::id(), NEXT.fetch_add(1, AtomicOrdering::Relaxed)));
+            fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("logger.txt");fs::write(&path, bytes).unwrap();
+            Self {dir, path}
+        }
+    }
+    impl Drop for LogFixture {
+        fn drop(&mut self) {
+            if let (Ok(dir), Ok(root)) = (self.dir.canonicalize(), std::env::temp_dir().canonicalize()) {
+                if dir != root && dir.starts_with(&root) && dir.file_name() == self.dir.file_name()
+                    && dir.file_name().is_some_and(|name|name.to_string_lossy().starts_with("ew-log-ui-")) {
+                    let _ = fs::remove_dir_all(dir);
+                }
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct Painted { texts: Vec<String>, log_rows: usize, layout_rows: usize, shapes: usize, communication_header: Option<Rect> }
+    fn inspect(shape: &Shape, clip: Rect, painted: &mut Painted) {
+        painted.shapes += 1;
+        match shape {
+            Shape::Vec(shapes) => for shape in shapes {inspect(shape, clip, painted)},
+            Shape::Text(text) => {
+                let s = text.galley.text();
+                painted.layout_rows += text.galley.rows.len();
+                if text.visual_bounding_rect().intersects(clip) {
+                    if s.starts_with("First specific communication failure observed") {
+                        painted.communication_header = Some(text.visual_bounding_rect().intersect(clip));
+                    }
+                    painted.log_rows += s.lines().filter(|line|line.starts_with("logrow ")).count();
+                    painted.texts.push(s.to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+    fn render(ctx: &Context, log: &LogReader, frame: usize, events: Vec<egui::Event>) -> Painted {
+        let output = ctx.run(RawInput {
+            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(900.0,700.0))),
+            time: Some(frame as f64 / 60.0), events, focused: true, ..RawInput::default()
+        }, |ctx| {
+            CentralPanel::default().show(ctx, |ui| {
+                show_log(ui, log, &mut None);
+            });
+        });
+        let mut painted = Painted::default();
+        let viewport = Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(900.0,700.0));
+        for shape in output.shapes {inspect(&shape.shape, shape.clip_rect.intersect(viewport), &mut painted);}
+        painted
+    }
+
+    #[test]
+    fn headless_log_view_virtualizes_history_and_paints_retention_limits() {
+        let mut bytes = Vec::new();
+        for row in 0..30_000 {writeln!(bytes,"logrow {row:05}: unique ordinary diagnostic message").unwrap();}
+        let fixture = LogFixture::new(&bytes);let mut reader = LogReader::default();
+        for _ in 0..2000 {reader.poll(&fixture.path);if !reader.catching_up(){break;}}
+        assert!(!reader.catching_up());assert!(reader.row_count() >= 4000);
+        let ctx = Context::default();ctx.style_mut(|style|style.animation_time=0.0);
+        let _ = render(&ctx,&reader,0,vec![]);let painted = render(&ctx,&reader,1,vec![]);
+        let cached_galleys = ctx.fonts(|fonts|fonts.num_galleys_in_cache());
+        let text = painted.texts.join("\n");
+        assert!(text.contains("256 KiB / 4096 lines"));assert!(text.contains("Earlier runs are not retained"));
+        assert!(painted.log_rows > 0 && painted.log_rows < 80,"painted {} history rows",painted.log_rows);
+        assert!(painted.layout_rows < 256,"laid out {} paint rows",painted.layout_rows);
+        assert!(cached_galleys < 256,"cached {cached_galleys} unique text layouts for a fixed viewport");
+        assert!(painted.shapes < 256);
+        eprintln!("log_ui viewport=900x700 source_bytes={} retained_rows={} painted_log_rows={} painted_layout_rows={} cached_galleys={} shapes={}",bytes.len(),reader.row_count(),painted.log_rows,painted.layout_rows,cached_galleys,painted.shapes);
+    }
+
+    #[test]
+    fn headless_log_view_paints_pending_scan_and_provisional_context() {
+        let mut bytes = b"ERROR - LoadSpriteTo() data/temp/temp_gun.png\n".to_vec();
+        for row in 0..30_000 {writeln!(bytes,"logrow {row:05}: unique ordinary diagnostic message").unwrap();}
+        bytes.extend_from_slice(b"Error in rust call: Couldn't receive the length from stream\nuseful transport trace\n");
+        let fixture = LogFixture::new(&bytes);let mut reader = LogReader::default();
+        for _ in 0..4 {reader.poll(&fixture.path);}
+        assert!(reader.catching_up());assert!(!reader.first_communication_failure.as_ref().unwrap().earlier_scanned);
+        let ctx = Context::default();ctx.style_mut(|style|style.animation_time=0.0);
+        let first = render(&ctx,&reader,0,vec![]);
+        let header = first.communication_header.expect("communication header must be painted inside the viewport");
+        let pointer = egui::Pos2::new(header.left()+8.0,header.center().y);
+        let button = |pressed|egui::Event::PointerButton{pos:pointer,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::default()};
+        // Negative control reproduces the previous fixture's one-second hold.
+        // egui defaults max_click_duration to 0.8 s, so it must not be a click.
+        let _ = render(&ctx,&reader,60,vec![egui::Event::PointerMoved(pointer),button(true)]);
+        let held_release = render(&ctx,&reader,120,vec![button(false)]);
+        assert!(!ctx.input(|input|input.pointer.primary_clicked()));
+        assert!(!held_release.texts.join("\n").contains("Provisional: earlier bytes have not yet been verified"));
+        // A real short click follows the exact same painted-header coordinates.
+        let _ = render(&ctx,&reader,121,vec![button(true)]);
+        let _ = render(&ctx,&reader,122,vec![button(false)]);
+        assert!(ctx.input(|input|input.pointer.primary_clicked()),"the headless input must generate a short click");
+        let painted = render(&ctx,&reader,180,vec![]);
+        let text = painted.texts.join("\n");
+        assert!(text.contains("scanning for the first failure in bounded steps"));
+        assert!(text.contains("Provisional: earlier bytes have not yet been verified"),"Painted text after real header click:\n{text}");
+        assert!(text.contains("Couldn't receive the length from stream"));
+        assert!(text.contains("16 KiB / 9 lines each"));
+        assert!(painted.layout_rows < 256 && painted.shapes < 256);
+        eprintln!("log_ui header_rect={header:?} pointer={pointer:?} long_hold_clicked=false short_16ms_clicked=true provisional=true pending_scan=true transport_context_painted=true layout_rows={} shapes={}",painted.layout_rows,painted.shapes);
+    }
+
+    #[derive(Default)]
+    struct NarrowPaint {
+        general: Option<Rect>, communication: Option<Rect>,
+        starts: Vec<Rect>, ends: Vec<Rect>, text_ends: Vec<(String,usize)>,
+    }
+    impl NarrowPaint {
+        fn visible_end(&self, text: &str) -> usize {
+            self.text_ends.iter().filter(|(s,_)|s==text).map(|(_,end)|*end).max().unwrap_or(0)
+        }
+        fn latest_visible(&self) -> bool {self.visible_end("LATEST")==6}
+    }
+    fn inspect_narrow(shape: &Shape, clip: Rect, out: &mut NarrowPaint) {
+        match shape {
+            Shape::Vec(shapes) => for shape in shapes {inspect_narrow(shape,clip,out)},
+            Shape::Text(text) => {
+                let s = text.galley.text();let mut index=0;let mut visible_end=0;
+                for row in &text.galley.rows {
+                    for glyph in &row.glyphs {
+                        index+=1;
+                        if clip.contains(glyph.logical_rect().translate(text.pos.to_vec2()).center()) {visible_end=index;}
+                    }
+                    if row.ends_with_newline {index+=1;}
+                }
+                if visible_end>0 {
+                    let rect=text.visual_bounding_rect().intersect(clip);
+                    if s.starts_with("First failure-like context") {out.general=Some(rect);}
+                    if s.starts_with("First specific communication failure observed") {out.communication=Some(rect);}
+                    if s=="Start" {out.starts.push(rect);}
+                    if s=="End" {out.ends.push(rect);}
+                    out.text_ends.push((s.to_owned(),visible_end));
+                }
+            }
+            _=>{}
+        }
+    }
+    fn render_narrow(ctx: &Context, log: &LogReader, frame: usize, events: Vec<egui::Event>) -> NarrowPaint {
+        let viewport=Rect::from_min_size(egui::Pos2::ZERO,Vec2::new(800.0,600.0));
+        let output=ctx.run(RawInput{screen_rect:Some(viewport),time:Some(frame as f64/60.0),events,focused:true,..RawInput::default()},|ctx|{
+            // Same status/sidebar dimensions and tab-row height as show_lobby,
+            // without constructing a Steam connection or operating the desktop.
+            egui::TopBottomPanel::bottom("noita_status").show(ctx,|ui|{ui.add_space(3.0);ui.label("Noita connected");});
+            egui::SidePanel::left("players").resizable(false).exact_width(230.0).show(ctx,|ui|{ui.label("Players");});
+            CentralPanel::default().show(ctx,|ui|{
+                ui.horizontal(|ui|{
+                    for title in ["Lobby","Game Settings","VoIP Settings","Chunk Map","Noita Log","Proxy Log"] {let _=ui.selectable_label(title=="Noita Log",title);}
+                });ui.separator();show_log(ui,log,&mut None);
+            });
+        });
+        let mut out=NarrowPaint::default();
+        for shape in output.shapes {inspect_narrow(&shape.shape,shape.clip_rect.intersect(viewport),&mut out);}
+        out
+    }
+    fn click_narrow(ctx: &Context, log: &LogReader, frame: &mut usize, rect: Rect) -> NarrowPaint {
+        let p=rect.center();let button=|pressed|egui::Event::PointerButton{pos:p,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::default()};
+        *frame+=1;let _=render_narrow(ctx,log,*frame,vec![egui::Event::PointerMoved(p),button(true)]);
+        *frame+=1;let _=render_narrow(ctx,log,*frame,vec![button(false)]);
+        assert!(ctx.input(|i|i.pointer.primary_clicked()),"fixture must deliver a short actual widget click");
+        *frame+=60;let _=render_narrow(ctx,log,*frame,vec![]);
+        *frame+=1;render_narrow(ctx,log,*frame,vec![])
+    }
+    fn exercise_expanded_contexts(both_maximum: bool, read_error: bool) {
+        let first=format!("ERROR: {}end","trace ".repeat(681));let other=format!("{}done","trace ".repeat(682));
+        assert_eq!(first.len(),4096);assert_eq!(other.len(),4096);
+        let mut bytes=format!("{first}\n{}Couldn't receive length from stream\n",format!("{other}\n").repeat(3)).into_bytes();
+        if both_maximum {bytes.extend_from_slice(format!("{}\n",other).repeat(4).as_bytes());}
+        bytes.extend_from_slice(b"LATEST\n");let fixture=LogFixture::new(&bytes);let mut log=LogReader::default();
+        for _ in 0..20 {log.poll(&fixture.path);if !log.catching_up(){break;}}
+        if read_error {log.error=Some(format!("Cannot read {}: Access is denied. Showing the last captured content.",fixture.path.display()));}
+        let general=log.first_failure.as_ref().unwrap().text.clone();let communication=log.first_communication_failure.as_ref().unwrap().text.clone();
+        assert!(general.len()>=16_380);if both_maximum {assert!(communication.len()>=16_380);}
+        let ctx=Context::default();ctx.style_mut(|s|s.animation_time=0.0);let mut frame=0;
+        let _=render_narrow(&ctx,&log,frame,vec![]);frame+=1;let initial=render_narrow(&ctx,&log,frame,vec![]);
+        let expanded_general=click_narrow(&ctx,&log,&mut frame,initial.general.expect("general header must be visible initially"));
+        assert!(expanded_general.communication.is_some(),"expanding the general context hid the communication header outside800x600/sidebar230");
+        let mut both=click_narrow(&ctx,&log,&mut frame,expanded_general.communication.unwrap());
+        assert!(both.latest_visible(),"LATEST row must remain visible with both contexts expanded");
+        assert!(both.text_ends.iter().any(|(s,_)|s=="Copy partial capture"),"Copy control must remain visible, disabled when clipboard unavailable");
+        assert_eq!(both.ends.len(),2,"both contexts need an accessible End control");
+        let comm_before=both.visible_end(&communication);
+        both=click_narrow(&ctx,&log,&mut frame,both.ends[0]);
+        assert_eq!(both.visible_end(&general),general.trim_end_matches('\n').chars().count(),"End of general context must actually paint its last captured glyph");
+        assert_eq!(both.visible_end(&communication),comm_before,"general navigation must not scroll communication context");
+        both=click_narrow(&ctx,&log,&mut frame,both.ends[1]);
+        let general_end=both.visible_end(&general);let comm_end=communication.trim_end_matches('\n').chars().count();
+        assert_eq!(both.visible_end(&communication),comm_end,"End of communication context must paint its last captured glyph");
+        both=click_narrow(&ctx,&log,&mut frame,both.starts[0]);
+        assert!(both.visible_end(&general)<general_end,"Start must return general context to its beginning");
+        assert_eq!(both.visible_end(&communication),comm_end,"Start of general must preserve communication scroll offset");
+        assert!(both.latest_visible());
+        eprintln!("log_ui800 sidebar=230 both_maximum={both_maximum} read_error={read_error} general_bytes={} communication_bytes={} independent_end_navigation=true latest_visible=true copy_visible=true",general.len(),communication.len());
+    }
+    #[test] fn expanded_log_contexts_exact_user_fixture_stay_accessible() {exercise_expanded_contexts(false,false);}
+    #[test] fn expanded_log_contexts_maximum_and_retained_error_stay_accessible() {exercise_expanded_contexts(true,true);}
+
+
+    #[test]
+    fn review_expanded_pending_contexts_with_retained_error_remain_navigable() {
+        let first = format!("ERROR: {}end", "trace ".repeat(681));
+        let other = format!("{}done", "trace ".repeat(682));
+        assert_eq!(first.len(), 4096);
+        assert_eq!(other.len(), 4096);
+        let mut bytes = format!("{first}\n{}", format!("{other}\n").repeat(3)).into_bytes();
+        // The tail's specific failure is real, but four front-scan polls cannot
+        // yet establish it as the first such failure in the long middle history.
+        bytes.extend_from_slice(&b"ordinary waiting for earlier scan\n".repeat(80_000));
+        bytes.extend_from_slice(b"Couldn't receive length from stream\n");
+        bytes.extend_from_slice(format!("{other}\n").repeat(4).as_bytes());
+        bytes.extend_from_slice(b"LATEST\n");
+        let fixture = LogFixture::new(&bytes);
+        let mut log = LogReader::default();
+        for _ in 0..4 { log.poll(&fixture.path); }
+        assert!(log.catching_up());
+        assert!(!log.first_communication_failure.as_ref().unwrap().earlier_scanned);
+        // The UI state after a subsequent file-access failure retains both
+        // contexts and catch-up state. This does not test OS permission setup.
+        log.error = Some(format!("Cannot read {}: Access is denied. Showing the last captured content.", fixture.path.display()));
+        let general = log.first_failure.as_ref().unwrap().text.clone();
+        let communication = log.first_communication_failure.as_ref().unwrap().text.clone();
+        assert!(general.len() >= 16_380 && communication.len() >= 16_380);
+        let ctx = Context::default();
+        ctx.style_mut(|style| style.animation_time = 0.0);
+        let mut frame = 0;
+        let _ = render_narrow(&ctx, &log, frame, vec![]);
+        frame += 1;
+        let initial = render_narrow(&ctx, &log, frame, vec![]);
+        let general_open = click_narrow(&ctx, &log, &mut frame, initial.general.unwrap());
+        assert!(general_open.communication.is_some(), "provisional communication header must remain reachable");
+        let mut both = click_narrow(&ctx, &log, &mut frame, general_open.communication.unwrap());
+        for required in ["Access is denied", "Reading recent output", "Provisional: earlier bytes"] {
+            assert!(both.text_ends.iter().any(|(text, visible_end)| text.find(required).is_some_and(|offset| *visible_end >= text[..offset + required.len()].chars().count())), "required caption phrase was not painted inside the viewport: {required}");
+        }
+        assert!(both.latest_visible(), "latest row must remain visible with both maximum contexts, pending scan, provisional caption and retained access error");
+        assert_eq!(both.ends.len(), 2);
+        let original_comm = both.visible_end(&communication);
+        both = click_narrow(&ctx, &log, &mut frame, both.ends[0]);
+        let general_end = general.trim_end_matches('\n').chars().count();
+        assert_eq!(both.visible_end(&general), general_end);
+        assert_eq!(both.visible_end(&communication), original_comm);
+        both = click_narrow(&ctx, &log, &mut frame, both.ends[1]);
+        let communication_end = communication.trim_end_matches('\n').chars().count();
+        assert_eq!(both.visible_end(&communication), communication_end);
+        both = click_narrow(&ctx, &log, &mut frame, both.starts[0]);
+        assert!(both.visible_end(&general) < general_end);
+        assert_eq!(both.visible_end(&communication), communication_end);
+        assert!(both.latest_visible());
+        eprintln!("review_ui800 sidebar=230 both_maximum=true pending_scan=true provisional=true retained_error=true independent_end_start=true latest_visible=true");
+    }
+
 }

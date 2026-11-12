@@ -167,7 +167,10 @@ enum InternalEvent {
 pub(crate) struct Shared {
     pub inbound_channel: Channel<NetworkEvent>,
     pub outbound_messages_s: tokio::sync::mpsc::UnboundedSender<OutboundMessage>,
+    #[cfg(test)]
+    pub audit_outbound_queued: std::sync::atomic::AtomicUsize,
     pub keep_alive: AtomicBool,
+    pub(crate) shutdown: tokio::sync::watch::Sender<bool>,
     pub peer_state: AtomicCell<PeerState>,
     pub remote_peers: DashMap<PeerId, RemotePeer>,
     pub host_addr: Option<SocketAddr>,
@@ -199,11 +202,15 @@ impl ConnectionManager {
         let (internal_incoming_messages_s, incoming_messages_r) = tokio::sync::mpsc::channel(512);
         let (outbound_messages_s, outbound_messages_r) = tokio::sync::mpsc::unbounded_channel();
         let (internal_events_s, internal_events_r) = tokio::sync::mpsc::unbounded_channel();
+        let (shutdown, _) = tokio::sync::watch::channel(false);
 
         let shared = Arc::new(Shared {
             inbound_channel: unbounded(),
             outbound_messages_s,
+            #[cfg(test)]
+            audit_outbound_queued: std::sync::atomic::AtomicUsize::new(0),
             keep_alive: AtomicBool::new(true),
+            shutdown,
             host_addr,
             peer_state: Default::default(),
             remote_peers: Default::default(),
@@ -307,9 +314,20 @@ impl ConnectionManager {
                     .await;
                     return;
                 }
-                if self.is_server && msg.dst.is_broadcast() {
-                    self.server_send_to_peers(msg.clone()).await;
-                }
+                let msg = if self.is_server && msg.dst.is_broadcast() {
+                    let source = msg.src;
+                    let value = InternalMessage::Normal(msg);
+                    self.server_broadcast_internal_message(source, &value).await;
+                    // Forward by borrowing the same envelope, then move its
+                    // payload into local delivery. In a two-peer run there are
+                    // no forwarding recipients, so no payload copy is needed.
+                    match value {
+                        InternalMessage::Normal(msg) => msg,
+                        _ => unreachable!(),
+                    }
+                } else {
+                    msg
+                };
                 if msg.dst.is_broadcast() || intended_for_me {
                     self.shared
                         .inbound_channel
@@ -357,7 +375,7 @@ impl ConnectionManager {
                 if self.is_server {
                     self.server_broadcast_internal_message(
                         PeerId::HOST,
-                        InternalMessage::RemoteConnected(peer_id),
+                        &InternalMessage::RemoteConnected(peer_id),
                     )
                     .await;
 
@@ -389,7 +407,7 @@ impl ConnectionManager {
                 if self.is_server {
                     self.server_broadcast_internal_message(
                         PeerId::HOST,
-                        InternalMessage::RemoteDisconnected(peer_id),
+                        &InternalMessage::RemoteDisconnected(peer_id),
                     )
                     .await;
                 }
@@ -406,7 +424,7 @@ impl ConnectionManager {
             Destination::Broadcast => {
                 let msg_src = msg.src;
                 let value = InternalMessage::Normal(msg);
-                self.server_broadcast_internal_message(msg_src, value).await;
+                self.server_broadcast_internal_message(msg_src, &value).await;
             }
         }
     }
@@ -423,18 +441,18 @@ impl ConnectionManager {
     async fn server_broadcast_internal_message(
         &mut self,
         excluded: PeerId,
-        value: InternalMessage,
+        value: &InternalMessage,
     ) {
         for mut peer in self.shared.direct_peers.iter_mut() {
             let peer_id = *peer.key();
             if peer_id != excluded {
                 // TODO handle errors
-                peer.send_stream.send(&value).await.ok();
+                peer.send_stream.send(value).await.ok();
             }
         }
     }
 
-    async fn astart(mut self, host_conn: Option<Connecting>) {
+    async fn run(&mut self, host_conn: Option<Connecting>) {
         debug!("astart running");
         if let Some(host_conn) = host_conn {
             match DirectPeer::connect(self.shared.clone(), host_conn).await {
@@ -468,6 +486,8 @@ impl ConnectionManager {
                 }
                 msg = self.outbound_messages_r.recv() => {
                     let msg = msg.expect("channel to not be closed");
+                    #[cfg(test)]
+                    self.shared.audit_outbound_queued.fetch_sub(1, Ordering::Relaxed);
                     if self.is_server {
                         self.server_send_to_peers(msg).await;
                     } else {
@@ -484,9 +504,28 @@ impl ConnectionManager {
             }
         }
 
+    }
+
+    async fn astart(mut self, host_conn: Option<Connecting>) {
+        let endpoint = self.endpoint.clone();
+        let mut shutdown = self.shared.shutdown.subscribe();
+        // The manager may be awaiting flow control inside a send or still
+        // connecting. Owner shutdown must cancel that complete operation,
+        // release its guards/queues and close the endpoint, not wait for the
+        // remote to resume. An active connection's send order is unchanged.
+        tokio::select! {
+            biased;
+            _ = async {
+                loop {
+                    // Drop the watch read guard before awaiting or notifying.
+                    let stopped = *shutdown.borrow_and_update();
+                    if stopped || shutdown.changed().await.is_err() { break; }
+                }
+            } => {},
+            _ = self.run(host_conn) => {},
+        }
         debug!("Closing endpoint");
-        self.endpoint
-            .close(0u32.into(), b"peer decided to disconnect");
+        endpoint.close(0u32.into(), b"peer decided to disconnect");
     }
 
     pub(crate) fn start(self) -> Result<(), TangledInitError> {
@@ -523,3 +562,6 @@ fn default_server_config() -> ServerConfig {
     config.transport_config(Arc::new(transport_config));
     config
 }
+
+#[cfg(test)]
+mod resource_audit;

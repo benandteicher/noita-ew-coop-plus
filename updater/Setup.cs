@@ -9,7 +9,7 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
 namespace CoopPlus {
-    public sealed class UserConfig { public int schema = 1; public string gameDir; public string settingsPath; public string saveStatePath; public bool pendingInstall; }
+    public sealed class UserConfig { public int schema = 1; public string gameDir; public string settingsPath; public string saveStatePath; public bool pendingInstall; public string automaticBackupPath; }
     internal sealed class SetupRequest {
         public string Root; public UserConfig Config; public string SettingsOverride; public List<InstallationCandidate> Candidates;
     }
@@ -20,6 +20,7 @@ namespace CoopPlus {
         internal static Func<string, string, List<InstallationCandidate>> Discover = (root, settings) => NoitaDetection.Discover(root, settings, NoitaDetection.GetSteamRoots());
         internal static UserConfig Load(string root, bool force, string[] arguments) {
             string path = Path.Combine(root, "coopplus.json"); Program.Guard(path);
+            bool hadConfig=File.Exists(path);
             UserConfig c = File.Exists(path) ? Json.Deserialize<UserConfig>(File.ReadAllText(path)) : null;
             if (c != null) {
                 ValidateState(root, c);
@@ -48,6 +49,7 @@ namespace CoopPlus {
             if (!NoitaDetection.Validate(root, c.gameDir, out reason)) throw new IOException("Invalid Noita installation: " + reason);
             c.pendingInstall = priorPending || c.pendingInstall || !String.Equals(priorGame, c.gameDir, StringComparison.OrdinalIgnoreCase);
             Engine.CheckNotBusy();
+            if(!hadConfig)AutomaticBackup.RecordFirstUse(root,c,arguments);
             WriteConfig(path, c);
             if (choice.Shortcut) {
                 try { CreateShortcut(root, c.gameDir, Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory)); }

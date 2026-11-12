@@ -68,11 +68,28 @@ impl NoitaLauncher {
             }
         };
 
+        let start_args = if crate::frozen_runtime::private_root().is_some() { None } else { start_args };
         let start_args = start_args
             .and_then(shlex::split)
             .map(|v| v.into_iter().map(OsString::from).collect::<Vec<_>>())
             .and_then(|args| NoitaStartCmd::from_full_args(&args));
-        let start_args = start_args.or_else(default_start_args);
+        let mut start_args = start_args.or_else(default_start_args);
+        if crate::frozen_runtime::private_root().is_some() {
+            let cmd = start_args.as_mut().expect("private Windows launch");
+            cmd.args = vec!["-always_store_userdata_in_workdir".into()];
+            assert_eq!(Path::new(&cmd.executable), paths.noita_exe());
+        } else if cfg!(windows) && crate::frozen_runtime::ID.is_some() && start_args.as_ref().is_some() {
+            let default_profile = std::env::var_os("USERPROFILE").map(PathBuf::from).expect("Windows profile").join("AppData/LocalLow/Nolla_Games_Noita");
+            if let Some(profile) = &paths.noita_save {
+                if profile == paths.noita_install() {
+                    let cmd = start_args.as_mut().unwrap();
+                    assert_eq!(Path::new(&cmd.executable), paths.noita_exe(), "Portable Co-op+ requires direct Noita launch");
+                    cmd.args = vec!["-always_store_userdata_in_workdir".into()];
+                } else {
+                    assert_eq!(profile, &default_profile, "Configured Noita profile does not match actual native launch; refusing fallback");
+                }
+            }
+        }
 
         Self {
             noita_install: noita_install.to_path_buf(),

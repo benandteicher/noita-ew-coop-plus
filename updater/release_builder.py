@@ -116,6 +116,66 @@ def payload_entries(baseline: dict[str, bytes], updater: bytes, runtime_source="
     return entries
 
 
+def frozen_entries(spec_path: pathlib.Path, updater: bytes) -> tuple[dict[str, bytes], dict]:
+    """Explicit native inputs; never substitute an official or diagnostic binary."""
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    if spec.get("schema") != 1 or not spec.get("runtimeId") or spec.get("diagnosticAdapter") is not False:
+        raise ValueError("Frozen runtime must explicitly identify a non-diagnostic runtime")
+    entries = {}
+    for item in spec["files"]:
+        name = item["path"]
+        if not safe_name(name) or not name.startswith(("mod/quant.ew/", "proxy/")) or name.casefold() in {n.casefold() for n in entries}:
+            raise ValueError("Invalid frozen runtime path: " + name)
+        parts = pathlib.PurePosixPath(name).parts
+        if any(p.casefold() in {"save00", "save_shared", "save_state", "tmp", "logs", "diagnostics", "private"} for p in parts) or parts[-1].casefold() in {"noita.exe", "noita_dev.exe", "proxy.ron", "config.xml", "mod_config.xml", "mod_settings.bin", "logger.txt"} or pathlib.PurePosixPath(name).suffix.casefold() in {".wak", ".log", ".dmp", ".zip", ".7z"}:
+            raise ValueError("Licensed/private/mutable content in frozen runtime: " + name)
+        path = pathlib.Path(item["source"])
+        if not path.is_absolute() or path.is_symlink() or bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x400):
+            raise ValueError("Native/runtime inputs must be explicit plain absolute files")
+        data = path.read_bytes()
+        if len(data) != item["size"] or sha(data) != item["sha256"]:
+            raise ValueError("Frozen input hash mismatch: " + name)
+        entries[name] = data
+    required = {"proxy/noita_proxy.exe", "proxy/steam_api64.dll", "mod/quant.ew/ewext.dll", "mod/quant.ew/init.lua", "mod/quant.ew/mod.xml", "mod/quant.ew/NoitaPatcher/noitapatcher.dll", "mod/quant.ew/NoitaPatcher/noitapatcher/nsew/nsew_native.dll"} | {"proxy/" + n for n in LICENSE_NAMES}
+    if not required <= entries.keys() or not spec.get("sourceHashes") or not spec.get("buildCommands"):
+        raise ValueError("Frozen runtime/component/source/build provenance is incomplete")
+    game_files = spec.get("gameFiles", [])
+    if not {"noita.exe", "data/data.wak"} <= {row["path"] for row in game_files}:
+        raise ValueError("Frozen runtime needs matching owned Noita fingerprints (hashes only)")
+    entries["updater/CoopUpdater.exe"] = updater
+    return entries, spec
+
+
+def public_frozen_metadata(spec: dict) -> dict:
+    """Keep raw build receipts private and label inherited origin as baseline."""
+    value = json.loads(json.dumps(spec))
+    value["files"] = [{k: v for k, v in row.items() if k != "source"} for row in value["files"]]
+    receipt = value.get("startupBuildProvenance")
+    if receipt is not None:
+        receipt["binary"] = "proxy/noita_proxy.exe"
+    origin = value.get("origin", {})
+    if origin.get("startupSessionCorrection") and "gameplay" in origin:
+        origin["historicalBaselineGameplay"] = origin["gameplay"]
+        origin["gameplay"] = (
+            "Current runtime preserves the inventoried underlying gameplay/extension/world/terrain code "
+            "and adds the reviewed proxy and Lua startup/run-session agreement wrappers listed in "
+            "runtimeChangedFiles and startupSessionCorrection. The historical baseline narrative below "
+            "describes the prior frozen runtime, before those wrappers."
+        )
+    def verify(item):
+        if isinstance(item, dict):
+            for key, child in item.items():
+                verify(key)
+                verify(child)
+        elif isinstance(item, list):
+            for child in item:
+                verify(child)
+        elif isinstance(item, str) and re.search(r"(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|\\\\)", item):
+            raise ValueError("Private absolute build path in public frozen provenance")
+    verify(value)
+    return value
+
+
 def build(args) -> dict:
     if args.repository != REPOSITORY:
         raise ValueError("Repository must be the approved personal repository")
@@ -129,7 +189,13 @@ def build(args) -> dict:
     if output.exists():
         raise ValueError("Output already exists; preserve previous packages")
     baseline, identity = read_baseline(pathlib.Path(args.baseline))
-    entries = payload_entries(baseline, pathlib.Path(args.updater).read_bytes(), args.runtime_source)
+    if args.runtime_source == "checkout" and not getattr(args, "frozen_runtime", None):
+        raise ValueError("Checkout releases require explicit frozen rebuilt proxy/DLL inputs; official fallback is forbidden")
+    frozen = None
+    if getattr(args, "frozen_runtime", None):
+        entries, frozen = frozen_entries(pathlib.Path(args.frozen_runtime), pathlib.Path(args.updater).read_bytes())
+    else:
+        entries = payload_entries(baseline, pathlib.Path(args.updater).read_bytes(), args.runtime_source)
     output.mkdir(parents=True)
     tag = f"coopplus-v{args.version}-b{args.build}"
     package_name = f"Co-op-Plus-{args.version}-build{args.build}-full.zip"
@@ -146,6 +212,8 @@ def build(args) -> dict:
                     "url": f"https://github.com/{REPOSITORY}/releases/download/{tag}/{package_name}"},
         "files": [{"path": n, "size": len(data), "sha256": sha(data)} for n, data in sorted(entries.items())],
     }
+    if frozen:
+        manifest["gameFiles"] = frozen["gameFiles"]
     manifest_raw = json_bytes(manifest)
     (output / "release.json").write_bytes(manifest_raw)
     mod_entries = {n: sha(data) for n, data in entries.items() if n.startswith("mod/quant.ew/")}
@@ -153,7 +221,7 @@ def build(args) -> dict:
     if args.runtime_source == "r14" and mod_entries != baseline_mod:
         raise ValueError("Initial payload mod runtime differs from R14")
     provenance = {
-        "sourceRevision": args.source_revision, "sourceMode": args.runtime_source,
+        "sourceRevision": args.source_revision, "sourceMode": "explicit-frozen-runtime" if frozen else args.runtime_source,
         "releaseTag": tag, "version": args.version, "build": args.build,
         "baselineArchive": {"name": pathlib.Path(args.baseline).name, "sha256": BASELINE_SHA256},
         "r14RuntimeCheckpoint": R14_CHECKPOINT, "requiredOfficialProxyVersion": OFFICIAL_VERSION,
@@ -166,14 +234,21 @@ def build(args) -> dict:
         "updaterSha256": sha(entries["updater/CoopUpdater.exe"]),
         "updaterSourceSha256": {p.name: sha(p.read_bytes()) for p in sorted((ROOT / "updater").glob("*.cs"))},
         "packageSha256": sha(package_bytes), "releaseMetadataSha256": sha(manifest_raw),
-        "savedRunCompatibility": "File update supports complete v1 managed installs independently of skipped builds. Matching R14 Continue is expected; broader saved-run migration is not established. Both peers must use the same runtime. Income OFF to ON still requires a New Game.",
+        "savedRunCompatibility": "File replacement does not establish save compatibility. Both peers must use the exact same frozen runtime. Automatic verified pre-launch backups preserve local checkpoints; code recovery does not undo saved world changes. Paired-save and arbitrary/crash-save compatibility remain unverified.",
         "publicationState": "DRAFT: anonymous GitHub release downloads are unavailable until separately approved publication.",
     }
+    if frozen:
+        provenance["frozenRuntime"] = public_frozen_metadata(frozen)
+        provenance["officialProxySha256"] = None
+        provenance["requiredOfficialProxyVersion"] = "rebuilt Co-op+ runtime " + frozen["runtimeId"]
+        provenance["nativeInputsExplicit"] = True
     (output / "provenance.json").write_bytes(json_bytes(provenance))
     bootstrap_entries = {"CoopPlus.exe": pathlib.Path(args.bootstrap).read_bytes(),
                          "current/updater/CoopUpdater.exe": entries["updater/CoopUpdater.exe"],
                          "seed/release.json": manifest_raw, "seed/package.zip": package_bytes}
     bootstrap_entries.update({n: baseline[n] for n in LICENSE_NAMES})
+    if frozen:
+        bootstrap_entries["THIRD-PARTY-NOTICES.txt"] = entries["proxy/THIRD-PARTY-NOTICES.txt"]
     bootstrap_entries["SETUP.txt"] = (
         "Co-op+ updater candidate -- draft review build\r\n\r\n"
         "Extract this entire archive to a permanent user-writable folder outside Noita, mods, and any source checkout.\r\n"
@@ -190,7 +265,7 @@ def build(args) -> dict:
     write_zip(output / bootstrap_name, bootstrap_entries)
     notes = (
         f"Co-op+ {args.version}, build {args.build}: Windows updater candidate.\n\n"
-        f"Source: `{args.source_revision}`. Official proxy remains v{OFFICIAL_VERSION}. "
+        f"Source: `{args.source_revision}`. Runtime: {frozen['runtimeId'] if frozen else 'official v' + OFFICIAL_VERSION}. "
         f"The complete mod payload {'is byte-identical to frozen R14' if provenance['runtimeIdenticalToR14'] else 'uses the explicitly approved checkout source'}.\n\n"
         "DRAFT for independent review. Do not publish or mark latest until approved. "
         "This release is not available to anonymous updater clients while draft. "
@@ -200,7 +275,7 @@ def build(args) -> dict:
         "File replacement compatibility is distinct from saved-run compatibility; see provenance.json.\n"
     )
     (output / "DRAFT-NOTES.md").write_text(notes, encoding="utf-8")
-    sums = "".join(f"{sha(p.read_bytes())}  {p.name}\n" for p in sorted(output.iterdir()) if p.name != "SHA256SUMS.txt")
+    sums = "".join(f"{sha(p.read_bytes())}  {p.name}\n" for p in sorted(output.iterdir()) if p.name not in ("SHA256SUMS.txt", "DRAFT-NOTES.md"))
     (output / "SHA256SUMS.txt").write_text(sums, encoding="utf-8")
     result = {"output": str(output.resolve()), "tag": tag, "package": manifest["package"],
               "modFiles": len(mod_entries), "runtimeIdenticalToR14": provenance["runtimeIdenticalToR14"],
@@ -220,6 +295,7 @@ def main():
     parser.add_argument("--updater", required=True)
     parser.add_argument("--runtime-source", choices=("r14", "checkout"), default="r14")
     parser.add_argument("--repository", default=REPOSITORY)
+    parser.add_argument("--frozen-runtime", help="Explicit frozen source/binary inventory; required for rebuilt candidate or known-good recovery")
     build(parser.parse_args())
 
 

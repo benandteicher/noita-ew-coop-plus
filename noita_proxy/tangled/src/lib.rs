@@ -93,6 +93,8 @@ impl Peer {
         data: Vec<u8>,
         reliability: Reliability,
     ) -> Result<(), NetError> {
+        #[cfg(test)]
+        self.shared.audit_outbound_queued.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.shared
             .outbound_messages_s
             .send(OutboundMessage {
@@ -141,7 +143,10 @@ impl Drop for Peer {
     fn drop(&mut self) {
         self.shared
             .keep_alive
-            .store(false, std::sync::atomic::Ordering::SeqCst)
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        // Preserve the existing Peer Drop/clone policy, but wake a manager
+        // blocked inside an awaited QUIC operation as well as an idle one.
+        self.shared.shutdown.send_replace(true);
     }
 }
 

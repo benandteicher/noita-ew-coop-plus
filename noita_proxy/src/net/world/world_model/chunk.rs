@@ -218,6 +218,10 @@ impl Chunk {
             self.mark_changed(offset);
         }
     }
+    /// Authoritative cache rebase; does not invent a local captured edit.
+    pub(super) fn cache_compact_pixel(&mut self, offset: usize, pixel: CompactPixel) {
+        self.pixels[offset] = pixel.raw();
+    }
     pub fn changed(&self, offset: usize) -> bool {
         self.changed.get(offset)
     }

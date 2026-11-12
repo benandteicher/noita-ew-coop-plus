@@ -110,7 +110,9 @@ namespace CoopPlus {
             Engine.VerifyInstalled(root, game);
             Setup.MarkInstalled(root);
             if (changed) { Console.WriteLine("Complete installation ready; restarting the managed updater."); return 42; }
-            if (checkOnly) { Console.WriteLine("Installation verified. Check-only mode: no proxy launched."); return 0; }
+            // This is deliberately in the NEW managed updater after redispatch.
+            // Protocol-1 old updaters install before they know about this gate.
+            if (checkOnly) { AutomaticBackup.Ensure(root, game, forwarded); Console.WriteLine("Installation verified. Check-only mode: no proxy launched."); return 0; }
             Engine.CheckNotBusy();
             return Launch(root, game, forwarded);
         }
@@ -165,6 +167,7 @@ namespace CoopPlus {
             }
         }
         internal static int Launch(string root, string game, string[] args) {
+            AutomaticBackup.PrepareLaunch(root, game, args);
             string proxy = Path.Combine(root, "current", "proxy");
             var config = Json.Deserialize<UserConfig>(File.ReadAllText(Path.Combine(root, "coopplus.json")));
             ValidateMutable(root, game, config.settingsPath); ValidateMutable(root, game, config.saveStatePath);
@@ -177,14 +180,13 @@ namespace CoopPlus {
             if (!HasOption(args, "--save-state-path")) { all.Add("--save-state-path"); all.Add(config.saveStatePath); }
             if (!HasOption(args, "--exe-path")) { all.Add("--exe-path"); all.Add(Path.Combine(game, "noita.exe")); }
             all.AddRange(args);
-            if (!ConsoleMode(args)) return ProxyHandoff.Launch(Path.Combine(proxy, "noita_proxy.exe"), proxy, all.ToArray());
-            var start = new ProcessStartInfo(Path.Combine(proxy, "noita_proxy.exe"), String.Join(" ", all.Select(Quote))) { UseShellExecute = false, WorkingDirectory = proxy };
-            start.EnvironmentVariables["NP_SKIP_MOD_CHECK"] = "1";
+            if (!ConsoleMode(args)) return ProxyHandoff.Launch(root, Path.Combine(proxy, "noita_proxy.exe"), proxy, all.ToArray());
+            var start = ProxyHandoff.NormalStart(root, Path.Combine(proxy, "noita_proxy.exe"), proxy, all.ToArray());
             Console.WriteLine("Opening official proxy in the requested console mode.");
             using (var process = Process.Start(start)) { process.WaitForExit(); return process.ExitCode; }
         }
         internal static bool ConsoleMode(string[] args) { return ForceConsole || HasOption(args, "--host") || HasOption(args, "--lobby") || args.Any(a => a == "--help" || a == "-h"); }
-        private static void ValidateForwarded(string root, string game, string proxy, string[] args) {
+        internal static void ValidateForwarded(string root, string game, string proxy, string[] args) {
             foreach (string option in new [] { "--settings-path", "--save-state-path", "--exe-path" }) {
                 for (int i = 0; i < args.Length; i++) {
                     string value = null;

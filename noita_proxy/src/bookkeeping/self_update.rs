@@ -47,6 +47,7 @@ impl Default for SelfUpdateManager {
 impl SelfUpdateManager {
     pub fn new() -> Self {
         let latest_check = Promise::spawn_thread("version check", || {
+            if crate::frozen_runtime::ID.is_some() { return None; }
             let client = Client::new();
             get_latest_release(&client)
                 .map(|release| release.tag_name)
@@ -65,6 +66,7 @@ impl SelfUpdateManager {
     }
 
     pub fn display_version(&mut self, ui: &mut Ui) {
+        if crate::frozen_runtime::ID.is_some() { ui.label(crate::frozen_runtime::label()); return; }
         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
             ui.label(concat!("Noita Proxy v", env!("CARGO_PKG_VERSION"),));
             match self.latest_check.ready() {
@@ -96,6 +98,7 @@ impl SelfUpdateManager {
     }
 
     pub fn self_update(&mut self, ui: &mut Ui) {
+        if crate::frozen_runtime::ID.is_some() { ui.label("Frozen Co-op+ runtime: use the matching Co-op+ package."); return; }
         let ctx = ui.ctx();
         match &self.state {
             State::Initial => {

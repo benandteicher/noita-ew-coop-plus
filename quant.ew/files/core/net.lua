@@ -14,6 +14,23 @@ net._rpc_inner = {
 }
 net.rpc = {}
 net.connect_failed = false
+net.connection_lost = false
+
+-- A terminal local socket cannot recover inside this game process. Keep its
+-- first cause visible and stop later frame work, rather than repeatedly polling
+-- a dead reader. Application errors on a healthy connection remain unaffected.
+function net.check_connection()
+    if net.connection_lost then return false end
+    local cause = ewext.netmanager_connection_error()
+    if cause ~= nil then
+        net.connection_lost = true
+        net.connection_error = cause
+        GamePrintImportant("Connection to proxy closed", "Co-op synchronization stopped. Close Noita normally before rejoining.")
+        print("Entangled Worlds local connection stopped: " .. cause)
+        return false
+    end
+    return true
+end
 
 local rpc_inner = net._rpc_inner
 
@@ -163,19 +180,25 @@ local function handle_message(msg)
     end
 end
 
-function net.update()
+function net.update(stop_after_message)
     while true do
         local msg = ewext.netmanager_recv()
         if msg == nil then
             break
         end
         handle_message(msg)
+        -- Startup ACK is a barrier: let deferred local-player initialization
+        -- set ctx.ready before consuming the proxy's subsequent peer replay.
+        if stop_after_message and stop_after_message() then break end
     end
     ewext.netmanager_flush()
 end
 
 function net.init()
-    local ok, res = util.tpcall(ewext.netmanager_connect)
+    local ok, res = util.tpcall(function()
+        assert(type(ewext.netmanager_connection_error) == "function", "Matching ewext connection lifecycle support required")
+        return ewext.netmanager_connect()
+    end)
     if not ok then
         net.connect_failed = true
         return
@@ -226,6 +249,11 @@ end
 
 function net.proxy_send(key, value)
     net.send_internal(key .. " " .. value, DEST_PROXY)
+    if key == "reset_world" and net.terrain_begin then
+        -- No receive/capture can interleave between the reset request and
+        -- closing this game's old application namespace.
+        net.terrain_begin()
+    end
 end
 
 function net.proxy_bin_send(key, value)

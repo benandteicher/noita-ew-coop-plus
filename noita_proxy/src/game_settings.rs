@@ -48,6 +48,26 @@ pub struct GameSettings {
     pub revive_on_drop: Option<bool>,
 }
 
+#[cfg(test)]
+mod session_editor_tests {
+    use super::*;
+    use eframe::egui::{self,Context,Rect,Vec2,RawInput,Event,PointerButton,Modifiers,epaint::Shape};
+    fn text(shape:&Shape,wanted:&str)->Option<Rect>{match shape{Shape::Text(text)if text.galley.text()==wanted=>Some(text.visual_bounding_rect()),Shape::Vec(shapes)=>shapes.iter().find_map(|shape|text(shape,wanted)),_=>None}}
+    fn paint(ctx:&Context,settings:&mut GameSettings,frame:usize,events:Vec<Event>)->egui::FullOutput {
+        ctx.run(RawInput {screen_rect:Some(Rect::from_min_size(egui::Pos2::ZERO,Vec2::new(1200.0,1800.0))),time:Some(frame as f64/60.0),events,focused:true,..Default::default()},|ctx|{egui::CentralPanel::default().show(ctx,|ui|{settings.show_editor(ui,true);});})
+    }
+    #[test]
+    fn session_editor_alternate_click_keeps_all_mode_options_visible() {
+        let ctx=Context::default();let mut settings=GameSettings::default();let label=tr("Local-health-alt");
+        let first=paint(&ctx,&mut settings,0,Vec::new());let point=first.shapes.iter().find_map(|shape|text(&shape.shape,&label)).expect("alternate choice painted").center();
+        let button=|pressed|Event::PointerButton {pos:point,button:PointerButton::Primary,pressed,modifiers:Modifiers::default()};
+        paint(&ctx,&mut settings,1,vec![Event::PointerMoved(point),button(true)]);
+        let changed=paint(&ctx,&mut settings,2,vec![button(false)]);
+        assert_eq!(settings.game_mode,Some(GameMode::LocalHealth(LocalHealthMode::Alternate)));
+        for label in[tr("Shared-health"),tr("Local-health"),tr("Local-health-alt"),tr("Local-health-perma"),"PvP".into()] {assert!(changed.shapes.iter().any(|shape|text(&shape.shape,&label).is_some()),"mode option disappeared on selection frame: {label}");}
+    }
+}
+
 pub struct DefaultSettings {
     pub debug_mode: bool,
     //item_dedup: bool,
@@ -177,46 +197,47 @@ impl FromStr for GameMode {
 }
 
 impl GameSettings {
-    pub fn show_editor(&mut self, ui: &mut Ui, enabled: bool) {
+    pub fn show_editor(&mut self, ui: &mut Ui, enabled: bool)->bool {
+        let before=self.clone();
         ui.add_enabled_ui(enabled, |ui| {
             let def = DefaultSettings::default();
-            let game_settings = self;
+            let game_settings = &mut *self;
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     let mut temp = game_settings.game_mode.unwrap_or(def.game_mode);
                     ui.label(tr("Game-mode"));
-                    if ui
+                    let shared=ui
                         .radio_value(&mut temp, GameMode::SharedHealth, tr("Shared-health"))
-                        .changed()
-                        || ui
+                        .changed();
+                    let normal=ui
                             .radio_value(
                                 &mut temp,
                                 GameMode::LocalHealth(LocalHealthMode::Normal),
                                 tr("Local-health"),
                             )
-                            .changed()
-                        || ui
+                            .changed();
+                    let alternate=ui
                             .radio_value(
                                 &mut temp,
                                 GameMode::LocalHealth(LocalHealthMode::Alternate),
                                 tr("Local-health-alt"),
                             )
-                            .changed()
-                        || ui
+                            .changed();
+                    let perma=ui
                             .radio_value(
                                 &mut temp,
                                 GameMode::LocalHealth(LocalHealthMode::PermaDeath),
                                 tr("Local-health-perma"),
                             )
-                            .changed()
-                        || ui
+                            .changed();
+                    let pvp=ui
                             .radio_value(
                                 &mut temp,
                                 GameMode::LocalHealth(LocalHealthMode::PvP),
                                 "PvP",
                             )
-                            .changed()
-                    {
+                            .changed();
+                    if shared || normal || alternate || perma || pvp {
                         game_settings.game_mode = Some(temp)
                     }
                 });
@@ -577,5 +598,6 @@ impl GameSettings {
                 *game_settings = GameSettings::default()
             }
         });
+        *self!=before
     }
 }

@@ -41,7 +41,11 @@ local function setup()
     ffi=lib
     ffi.cdef[[
       void* __stdcall GetModuleHandleA(const char*);
-      unsigned long __stdcall GetModuleFileNameA(void*,char*,unsigned long);
+      unsigned long __stdcall GetModuleFileNameW(void*,unsigned short*,unsigned long);
+      void* __stdcall CreateFileW(const unsigned short*,unsigned long,unsigned long,void*,unsigned long,unsigned long,void*);
+      int __stdcall GetFileSizeEx(void*,long long*);
+      int __stdcall ReadFile(void*,void*,unsigned long,unsigned long*,void*);
+      int __stdcall CloseHandle(void*);
       void* __stdcall GetCurrentProcess(void);
       int __stdcall FlushInstructionCache(void*,const void*,unsigned long);
       void* __stdcall VirtualAlloc(void*,unsigned long,unsigned long,unsigned long);
@@ -132,14 +136,37 @@ local function expected(rva,size)
     end
     return result
 end
+local function read_actual_executable()
+    -- Keep the loaded module's UTF-16 path intact. ANSI io.open loses non-ACP
+    -- characters in a private install path; never fall back to another EXE.
+    local path=ffi.new("unsigned short[32768]")
+    local n=kernel.GetModuleFileNameW(nil,path,32768)
+    if n==0 or n>=32768 then return nil,"module path unavailable"end
+    local file=kernel.CreateFileW(path,0x80000000,1,nil,3,0x80,nil)
+    if file==nil or file==ffi.cast("void*",-1)then return nil,"cannot read actual executable"end
+    -- FILE_SHARE_READ denies concurrent write/delete while this handle is open.
+    -- Bound allocation/read to the already guarded build; no unbounded *a read.
+    local ok,result,reason=pcall(function()
+        local size=ffi.new("long long[1]")
+        if kernel.GetFileSizeEx(file,size)==0 then return nil,"actual executable size unavailable"end
+        if tonumber(size[0])~=15460864 then return nil,"unsupported executable size"end
+        local data=ffi.new("unsigned char[15460864]")
+        local count=ffi.new("unsigned long[1]")
+        if kernel.ReadFile(file,data,15460864,count,nil)==0 then return nil,"cannot read actual executable"end
+        if tonumber(count[0])~=15460864 then return nil,"incomplete actual executable read"end
+        return ffi.string(data,15460864)
+    end)
+    local closed=kernel.CloseHandle(file)
+    if not ok then return nil,result end
+    if closed==0 then return nil,"actual executable handle close failed"end
+    return result,reason
+end
 local function verify_build()
     image=number(kernel.GetModuleHandleA(nil))
     if image==0 or not committed(image,512)then return fail("module unavailable")end
-    local path=ffi.new("char[2048]");local n=kernel.GetModuleFileNameA(nil,path,2048)
-    if n==0 or n>=2048 then return fail("module path unavailable")end
-    local name=ffi.string(path,n)
-    local file=io.open(name,"rb");if not file then return fail("cannot read actual executable")end
-    disk=file:read("*a");file:close()
+    local reason
+    disk,reason=read_actual_executable()
+    if not disk then return fail(reason)end
     if #disk~=15460864 or sha256(disk)~=EXPECTED_SHA then return fail("unsupported executable SHA256")end
     parsed=parse(disk)
     local pe=u32(disk,0x3c+1)

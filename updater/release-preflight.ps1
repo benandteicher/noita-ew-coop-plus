@@ -27,6 +27,9 @@ function Assert-CoopPublishingTarget {
     if ($Repository -ne 'benandteicher/noita-ew-coop-plus' -or $Tag -notmatch '^coopplus-v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+-b[0-9]+$') {
         throw 'Unexpected publishing repository/tag.'
     }
+    if ($Tag -in @('coopplus-v1.9.18.0-b7','coopplus-v1.9.18.1-b8','coopplus-v1.9.18.2-b9','coopplus-v1.9.18.3-b10','coopplus-v1.9.18.4-b11','coopplus-v1.9.18.5-b12','coopplus-v1.9.18.6-b13','coopplus-v1.9.18.7-b14','coopplus-v1.9.18.8-b15','coopplus-v1.9.18.9-b16')) {
+        throw 'Superseded unpublished assets are not publishable. Use the current startup/session correction sealed normal/recovery assets and frozen publication commands.'
+    }
     # A successful nullable lookup proves absence. Nonzero exit, errors, missing
     # fields, or inaccessible repository are never interpreted as a missing tag.
     $query = 'query($owner:String!,$name:String!,$tag:String!,$ref:String!){repository(owner:$owner,name:$name){nameWithOwner release(tagName:$tag){id} ref(qualifiedName:$ref){target{__typename oid}}}}'

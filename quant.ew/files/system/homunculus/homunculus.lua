@@ -8,6 +8,7 @@ local homunculus = {}
 -- frame off the cached list.
 local LUKKI_RESCAN_INTERVAL = 20
 local lukki_cache = {}
+local had_minions = false
 
 local function get_lukki(entity)
     local frame = GameGetFrameNum()
@@ -74,7 +75,8 @@ end
 rpc.opts_reliable()
 function rpc.send_positions(ho, lu, gh, f)
     local h, l, g = get_entities(ctx.rpc_player_data.entity)
-    if #ho ~= 0 then
+    -- An empty authoritative list also removes the last replica in a family.
+    if #ho ~= 0 or #h ~= 0 then
         for i, child in ipairs(h) do
             if ho[i] == nil then
                 EntityKill(child)
@@ -88,7 +90,7 @@ function rpc.send_positions(ho, lu, gh, f)
             EntityAddChild(ctx.rpc_player_data.entity, n)
         end
     end
-    if #lu ~= 0 then
+    if #lu ~= 0 or #l ~= 0 then
         for i, child in ipairs(l) do
             if lu[i] == nil then
                 EntityKill(child)
@@ -98,7 +100,7 @@ function rpc.send_positions(ho, lu, gh, f)
         end
         for i = 1, #lu - #l do
             local n = EntityLoad("data/entities/misc/perks/lukki_minion.xml", lu[#l + i][1], lu[#l + i][2])
-            util.set_phys_info(n, lu[i][3], ctx.rpc_player_data.fps)
+            util.set_phys_info(n, lu[#l + i][3], ctx.rpc_player_data.fps)
             EntityAddComponent(n, "VariableStorageComponent", {
                 name = "owner_id",
                 value_int = ctx.rpc_player_data.entity,
@@ -154,8 +156,12 @@ function homunculus.on_world_update()
             table.insert(gh, { x, y, rnd })
         end
     end
-    if #ho ~= 0 or #lu ~= 0 or #gh ~= 0 then
+    local has_minions = #ho ~= 0 or #lu ~= 0
+    -- Reliable snapshots carry the final removal once, then return to idle.
+    -- Keep it pending if sending raises an error before accepting the snapshot.
+    if has_minions or #gh ~= 0 or had_minions then
         rpc.send_positions(ho, lu, gh, GameGetFrameNum())
+        had_minions = has_minions
     end
 end
 return homunculus

@@ -7,3 +7,4 @@ pub mod save_state;
 pub mod self_restart;
 pub mod self_update;
 pub mod settings;
+pub mod run_settings;

@@ -18,8 +18,11 @@ class PresentationTests(unittest.TestCase):
         p.b.execute("assert(#EntityGetWithTag('ew_income_effect')==1)")
     def test_pickup_position_survives_pending_receipt_reload(self):
         p=self.setup_pickup()
-        saved={who:{k:lua.eval('globals')[k]for k in ('ew_income_run_v1','ew_income_owner_v1')if lua.eval('globals')[k]}for who,lua in p.peers.items()}
-        q=IncomePeers(ALIVE+';EntitySetTransform(ctx.my_player.entity,-800,-900)',saved);q.tick(35)
+        # V2 continuation needs the matching wallet body/receipt and ledger pages,
+        # not just the two legacy aggregate Globals.
+        saved=p.snapshot()
+        q=IncomePeers(ALIVE,saved)
+        q.b.execute('EntitySetTransform(ctx.my_player.entity,-800,-900)');q.tick(35)
         self.assertEqual(q.money('B'),110)
         q.b.execute("local f=EntityGetWithTag('ew_income_effect');assert(#f==1);local x,y=EntityGetTransform(f[1]);assert(x==170 and y==90)")
     def test_world_distances_units_diagonal_boundary_and_unknown(self):

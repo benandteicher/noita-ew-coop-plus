@@ -85,3 +85,15 @@ graphical proxy handoff into the single managed updater EXE. Protocol 1 and its
 package roots remain unchanged. Embedded bootstrap icon/file metadata apply only
 to new bootstrap builds; root CoopPlus.exe is never replaced by routine updates.
 Keep the published-build-1 to next-published-build test pending until approval.
+# Current first-use correction preparation
+
+Normal build7 and recovery build8 are superseded unpublished assets and must not
+be published. The current local successor candidates are version1.9.18.2/build9
+and version1.9.18.3/build10. Use the pinned source, asset hashes and active commands
+in the first-use correction handoff, after approval. The source publisher rejects
+the superseded tags. No public source/release/Latest mutation is authorized by
+local preparation. Existing build7 TEST packages and their gameplay runtime stay
+unchanged; players use the instruction sidecar without another TEST download.
+
+The workflow description below includes historical build1/build2 milestones.
+

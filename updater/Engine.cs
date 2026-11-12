@@ -18,6 +18,9 @@ namespace CoopPlus {
         public int schema; public string channel; public string version; public long build;
         public int minBootstrap; public string sourceRevision; public string officialProxyVersion;
         public PackageInfo package; public FileInfoEntry[] files;
+        // Optional for historical protocol-1 manifests; new releases pin the
+        // licensed local engine by fingerprints only and never distribute it.
+        public FileInfoEntry[] gameFiles;
     }
     public sealed class UnsupportedBootstrapException : Exception { public UnsupportedBootstrapException(string s) : base(s) {} }
 
@@ -74,6 +77,16 @@ namespace CoopPlus {
                 int slash = path.IndexOf('/');
                 while (slash >= 0) { if (paths.Contains(path.Substring(0, slash))) throw new InvalidDataException("File/directory path collision."); slash = path.IndexOf('/', slash + 1); }
             }
+            if(m.gameFiles!=null) {
+                if(m.gameFiles.Length<2 || m.gameFiles.Length>100)throw new InvalidDataException("Invalid frozen game runtime fingerprints.");
+                var gamePaths=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach(var f in m.gameFiles)
+                    if(f==null || !SafeGamePath(f.path) || f.size<1 || !ValidHash(f.sha256) || !gamePaths.Add(f.path))throw new InvalidDataException("Invalid or duplicate frozen game runtime fingerprint.");
+                if(!gamePaths.Contains("noita.exe") || !gamePaths.Contains("data/data.wak"))throw new InvalidDataException("Frozen game fingerprints must include noita.exe and data/data.wak.");
+            }
+        }
+        static bool SafeGamePath(string path) {
+            return SafeSegments(path) && (String.Equals(path,"noita.exe",StringComparison.OrdinalIgnoreCase) || String.Equals(path,"data/data.wak",StringComparison.OrdinalIgnoreCase) || String.Equals(path,"steam_appid.txt",StringComparison.OrdinalIgnoreCase) || path.IndexOf('/')<0 && path.EndsWith(".dll",StringComparison.OrdinalIgnoreCase));
         }
         static bool ValidHash(string s) { return s != null && HashPattern.IsMatch(s); }
         static bool SafeLeaf(string s) { return s != null && s.Length > 0 && s.Length <= 180 && s.IndexOf('/') < 0 && s.IndexOf('\\') < 0 && SafeSegments(s); }
@@ -217,6 +230,7 @@ namespace CoopPlus {
         public static ReleaseManifest VerifyInstalled(string root,string gameDir) {
             root=Canon(root); gameDir=Canon(gameDir); ValidateInstallPaths(root,gameDir);
             var m=ReadInstalled(root); if(m==null) throw new InvalidDataException("No complete Co-op+ installation is available.");
+            VerifyGameRuntime(gameDir,m);
             var expectedMod=new HashSet<string>(StringComparer.OrdinalIgnoreCase); var expectedCurrent=new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "installed.json", "proxy/ew_log.txt", "proxy/ew_log_old.txt" };
             foreach(var f in m.files) {
                 bool mod=f.path.StartsWith("mod/quant.ew/",StringComparison.Ordinal); string rel=mod?f.path.Substring("mod/quant.ew/".Length):f.path;
@@ -227,8 +241,17 @@ namespace CoopPlus {
                 foreach(string path in Directory.EnumerateFiles(pair.dir,"*",SearchOption.AllDirectories)) { string rel=path.Substring(pair.dir.Length+1).Replace('\\','/'); if(!pair.expected.Contains(rel) && !(Same(pair.dir,Mod(gameDir)) && GeneratedModFile(rel))) throw new InvalidDataException("Unexpected managed file: " + rel); }
             return m;
         }
+        public static void VerifyGameRuntime(string gameDir,ReleaseManifest manifest) {
+            if(manifest.gameFiles==null)return;
+            foreach(var file in manifest.gameFiles) {
+                string path=Path.Combine(gameDir,file.path.Replace('/',Path.DirectorySeparatorChar));AssertNoReparse(path);
+                try {VerifyFile(path,file);}
+                catch(Exception e) {throw new InvalidDataException("The installed Noita engine does not match this frozen Co-op+ runtime: "+file.path+". Nothing was launched; verify the supported owned game version before retrying.",e);}
+            }
+        }
         public static void Install(string root,string gameDir,string packagePath,ReleaseManifest manifest) {
             ValidateManifest(manifest); root=Canon(root); gameDir=Canon(gameDir); ValidateInstallPaths(root,gameDir); CheckNotBusy();
+            VerifyGameRuntime(gameDir,manifest);
             Directory.CreateDirectory(root); Directory.CreateDirectory(gameDir);
             Recover(root,gameDir);
             string id=Guid.NewGuid().ToString("N"),stage=StageRoot(root,id),stageMod=StageMod(gameDir,id),stageCurrent=Path.Combine(stage,"current"),journalPath=Path.Combine(root,"install-journal.json");

@@ -189,7 +189,7 @@ pub fn connect_cli(lobby: String, args: Args) {
         let peer = steam_networking::SteamPeer::new_connect(
             LobbyCode::parse(lobby.trim()).unwrap().code,
             state.client,
-        );
+        ).unwrap_or_else(|error|{eprintln!("{error}");exit(1)});
         PeerVariant::Steam(peer)
     } else {
         println!("no steam");
@@ -204,7 +204,15 @@ pub fn connect_cli(lobby: String, args: Args) {
 ///
 /// The `bind_addr` is either `Some` address/port pair to bind to, or `None` to use Steam networking.
 pub fn host_cli(bind_addr: Option<SocketAddr>, args: Args) {
-    let (state, netmaninit, kind, audio, lobbytype, game_settings) = cli_setup(args);
+    let (state, mut netmaninit, kind, audio, lobbytype, game_settings) = cli_setup(args);
+    let selection=(||->std::io::Result<_>{
+        use crate::bookkeeping::run_settings::{SavedRunSettings,SessionRules};
+        if let Some(info)=netmaninit.save_state.load_checked::<crate::net::RunInfo>()? {
+            let saved=SavedRunSettings::load(netmaninit.save_state.directory(),info.seed)?.ok_or_else(||std::io::Error::other("Legacy checkpoint has no authoritative rules record. Open the graphical Co-op+ launcher and explicitly confirm Continue; CLI will not guess or reset it."))?;
+            Ok((saved.settings.clone(),SessionRules::from_saved(&saved)))
+        } else {let mut active=game_settings.clone();if !active.use_constant_seed{active.seed=rand::random();}Ok((active,SessionRules::default()))}
+    })().unwrap_or_else(|error|{eprintln!("{error}");exit(1)});
+    netmaninit.save_state=netmaninit.save_state.for_session();
     let variant = if let Some(bind_addr) = bind_addr {
         let peer = Peer::host(bind_addr, None).unwrap();
         PeerVariant::Tangled(peer)
@@ -217,7 +225,7 @@ pub fn host_cli(bind_addr: Option<SocketAddr>, args: Args) {
                 name: "no name specified".to_string(),
                 game_mode: None,
             },
-        );
+        ).unwrap_or_else(|error|{eprintln!("{error}");exit(1)});
         PeerVariant::Steam(peer)
     } else {
         println!("no steam");
@@ -225,7 +233,10 @@ pub fn host_cli(bind_addr: Option<SocketAddr>, args: Args) {
     };
     let player_path = netmaninit.paths.noita_quantew_player_spritesheet.clone();
     let netman = NetManager::new(variant, netmaninit, audio);
-    *netman.settings.lock().unwrap() = game_settings;
+    *netman.settings.lock().unwrap() = selection.0.clone();
+    *netman.pending_settings.lock().unwrap()=selection.0;
+    *netman.session_rules.lock().unwrap()=selection.1;
+    netman.apply_host_preferences(&game_settings);
     netman.start_inner(player_path, Some(kind)).unwrap();
 }
 

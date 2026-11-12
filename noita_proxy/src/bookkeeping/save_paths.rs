@@ -23,6 +23,9 @@ impl SavePaths {
         settings_path: Option<PathBuf>,
         save_state_path: Option<PathBuf>,
     ) -> SavePaths {
+        if let Some(root) = crate::frozen_runtime::private_root() {
+            return Self::new(root.join("proxy/proxy.ron"), root.join("proxy/save_state"));
+        }
         use Prefer::*;
         enum Prefer {
             Custom,
@@ -93,6 +96,7 @@ impl SavePaths {
         match Settings::load(&self.settings_path) {
             Ok(settings) => settings,
             Err(e) => {
+                assert!(crate::frozen_runtime::private_root().is_none() && (crate::frozen_runtime::ID.is_none() || (e.kind() == std::io::ErrorKind::NotFound && !self.settings_path.exists())), "Missing/corrupt frozen proxy settings; preserved without resetting: {e}");
                 warn!("Failed to load settings: {e}");
                 info!("Using default settings");
                 Settings::default()

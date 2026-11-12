@@ -265,6 +265,354 @@ impl<T: Copy> ChunkCache<T> {
     }
 }
 
+/// A validated local-protocol packet. Unlike the legacy decoder's parser,
+/// this rejects every malformed extent before the first game mutation.
+struct TerrainArea<'a> {
+    x: i32,
+    y: i32,
+    data: &'a [u8],
+    runs: &'a [u8],
+}
+
+impl<'a> TerrainArea<'a> {
+    fn parse(data: &'a [u8], last_material_id: i16) -> eyre::Result<Self> {
+        let (header, _, run_count) = parse_encoded_area(data)?;
+        if header.width != 127 || header.height != 127 || header.x % 128 != 0 || header.y % 128 != 0
+        {
+            eyre::bail!("Terrain application requires one aligned 128x128 chunk");
+        }
+        header
+            .x
+            .checked_add(127)
+            .ok_or_else(|| eyre::eyre!("Terrain x extent overflows"))?;
+        header
+            .y
+            .checked_add(127)
+            .ok_or_else(|| eyre::eyre!("Terrain y extent overflows"))?;
+        let needed = size_of::<EncodedAreaHeader>() + run_count * size_of::<NoitaPixelRun>();
+        if needed != data.len() || run_count > 128 * 128 {
+            eyre::bail!("Terrain packet has extra bytes or too many runs");
+        }
+        let runs = &data[size_of::<EncodedAreaHeader>()..];
+        let mut extent = 0usize;
+        for run in runs.chunks_exact(5) {
+            let material = i16::from_le_bytes([run[2], run[3]]);
+            if material != -1 && (material < 0 || material > last_material_id) {
+                eyre::bail!("Terrain packet has invalid material {material}");
+            }
+            if run[4] & !LIQUID_FLAG_STATIC != 0 {
+                eyre::bail!("Terrain packet has unsupported flags {}", run[4]);
+            }
+            if material == 0 && run[4] != 0 {
+                eyre::bail!("Air terrain cannot have liquid flags");
+            }
+            extent += usize::from(u16::from_le_bytes([run[0], run[1]])) + 1;
+            if extent > 128 * 128 {
+                eyre::bail!("Terrain runs exceed the chunk extent");
+            }
+        }
+        if extent != 128 * 128 {
+            eyre::bail!("Terrain runs do not fill the chunk extent");
+        }
+        Ok(Self {
+            x: header.x,
+            y: header.y,
+            data,
+            runs,
+        })
+    }
+
+    fn offset(&self, x: i32, y: i32) -> usize {
+        (x - self.x) as usize + (y - self.y) as usize * 128
+    }
+
+    /// Keep only targets not resolved during this call. In particular, later
+    /// attempts must never reassert already completed cells over new edits.
+    fn remaining_blob(&self, remaining: &[bool]) -> Option<Vec<u8>> {
+        if !remaining.iter().any(|&value| value) {
+            return None;
+        }
+        fn append_run(out: &mut Vec<u8>, length: usize, material: u16, flags: u8) {
+            out.extend_from_slice(&((length - 1) as u16).to_le_bytes());
+            out.extend_from_slice(&material.to_le_bytes());
+            out.push(flags);
+        }
+        let mut out = self.data[..size_of::<EncodedAreaHeader>()].to_vec();
+        let mut offset = 0usize;
+        let mut count = 0u16;
+        let mut current = (u16::MAX, 1u8);
+        let mut length = 0usize;
+        for run in self.runs.chunks_exact(5) {
+            let run_length = usize::from(u16::from_le_bytes([run[0], run[1]])) + 1;
+            let required = (u16::from_le_bytes([run[2], run[3]]), run[4]);
+            for &unresolved in &remaining[offset..offset + run_length] {
+                let target = if unresolved { required } else { (u16::MAX, 1) };
+                if length != 0 && target != current {
+                    append_run(&mut out, length, current.0, current.1);
+                    count += 1;
+                    length = 0;
+                }
+                current = target;
+                length += 1;
+            }
+            offset += run_length;
+        }
+        append_run(&mut out, length, current.0, current.1);
+        count += 1;
+        out[10..12].copy_from_slice(&count.to_le_bytes());
+        Some(out)
+    }
+
+    fn visit_required(
+        &self,
+        mut visit: impl FnMut(i32, i32, i16, u8) -> eyre::Result<()>,
+    ) -> eyre::Result<()> {
+        let mut offset = 0usize;
+        for run in self.runs.chunks_exact(5) {
+            let length = usize::from(u16::from_le_bytes([run[0], run[1]])) + 1;
+            let material = i16::from_le_bytes([run[2], run[3]]);
+            if material != -1 {
+                for index in offset..offset + length {
+                    visit(
+                        self.x + (index % 128) as i32,
+                        self.y + (index / 128) as i32,
+                        material,
+                        run[4],
+                    )?;
+                }
+            }
+            offset += length;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TerrainCell {
+    material: i16,
+    kind: ntypes::CellType,
+    flags: u8,
+}
+
+impl TerrainCell {
+    /// The same synchronization projection as encode_area: box2d and
+    /// non-terrain cells are represented as air, without removing them.
+    fn matches(cell: Option<Self>, material: i16, flags: u8) -> bool {
+        let (actual_material, actual_flags) = match cell {
+            Some(Self {
+                material,
+                kind: ntypes::CellType::Liquid,
+                flags,
+            }) => (material, flags),
+            Some(Self {
+                material,
+                kind: ntypes::CellType::Gas | ntypes::CellType::Fire,
+                ..
+            }) => (material, 0),
+            _ => (0, 0),
+        };
+        actual_material == material && actual_flags == flags
+    }
+}
+
+/// Shared by the real slot adapter and host regression adapters. A resolved
+/// cell was observed after all mutations finished; construction count alone
+/// never establishes application. Physical solid conflicts remain required.
+trait TerrainGrid {
+    fn loaded(&mut self, x: i32, y: i32) -> eyre::Result<bool>;
+    fn read(&mut self, x: i32, y: i32) -> eyre::Result<Option<TerrainCell>>;
+    fn remove(&mut self, x: i32, y: i32) -> eyre::Result<()>;
+    fn construct(&mut self, x: i32, y: i32, material: i16, flags: u8) -> eyre::Result<()>;
+    fn set_liquid_flags(&mut self, x: i32, y: i32, flags: u8) -> eyre::Result<()>;
+}
+
+pub(crate) struct TerrainApplyOutcome {
+    pub(crate) remaining: Option<Vec<u8>>,
+    /// False only when preflight observed an unloaded chunk before any writes.
+    /// The caller must suppress that entire capture, including air-looking data.
+    pub(crate) loaded: bool,
+}
+
+fn apply_terrain_grid(
+    area: &TerrainArea<'_>,
+    grid: &mut impl TerrainGrid,
+) -> eyre::Result<TerrainApplyOutcome> {
+    // Alignment guarantees these corners belong to the same native512 chunk.
+    // Check load state separately: an unloaded encoder read also looks like air.
+    let loaded = grid.loaded(area.x, area.y)? && grid.loaded(area.x + 127, area.y + 127)?;
+    if area
+        .runs
+        .chunks_exact(5)
+        .all(|run| u16::from_le_bytes([run[2], run[3]]) == u16::MAX)
+    {
+        // Unknown is no requirement. Even an unloaded empty mask is complete,
+        // while loaded=false still tells the caller to suppress its capture.
+        return Ok(TerrainApplyOutcome {
+            remaining: None,
+            loaded,
+        });
+    }
+    if !loaded {
+        return Ok(TerrainApplyOutcome {
+            remaining: Some(area.data.to_vec()),
+            loaded: false,
+        });
+    }
+    // Most applications complete. Allocate a mask only for the first actual
+    // physical conflict rather than zeroing/scanning 16K cells on every call.
+    let mut remaining: Option<Vec<bool>> = None;
+    area.visit_required(|x, y, material, flags| {
+        let existing = grid.read(x, y)?;
+        let mut applied = existing;
+        if existing.is_some_and(|cell| cell.kind == ntypes::CellType::Solid) {
+            if TerrainCell::matches(existing, material, flags) {
+                return Ok(());
+            }
+            // Box2d occupancy can be ordinary and temporary. Leave the
+            // physical cell alone, retain its target, and acknowledge only
+            // the other cells actually resolved in this call.
+            remaining.get_or_insert_with(|| vec![false; 128 * 128])[area.offset(x, y)] = true;
+            return Ok(());
+        }
+        let same_material = existing.is_some_and(|cell| cell.material == material);
+        if !same_material && !TerrainCell::matches(existing, material, flags) {
+            if existing.is_some() {
+                grid.remove(x, y)?;
+                if grid.read(x, y)?.is_some() {
+                    eyre::bail!("Terrain removal left an occupied slot at {x},{y}");
+                }
+                applied = None;
+            }
+            if material != 0 {
+                grid.construct(x, y, material, flags)?;
+                applied = grid.read(x, y)?;
+            }
+        }
+        if applied.is_some_and(|cell| cell.kind == ntypes::CellType::Liquid && cell.flags != flags)
+        {
+            grid.set_liquid_flags(x, y, flags)?;
+        }
+        Ok(())
+    })?;
+    // A later constructor/removal may affect an earlier neighbouring cell.
+    // Establish the boundary only after every required write has completed.
+    if !grid.loaded(area.x, area.y)? || !grid.loaded(area.x + 127, area.y + 127)? {
+        eyre::bail!("Terrain chunk unloaded during application");
+    }
+    area.visit_required(|x, y, material, flags| {
+        if remaining.as_ref().is_some_and(|mask| mask[area.offset(x, y)]) {
+            return Ok(());
+        }
+        if !TerrainCell::matches(grid.read(x, y)?, material, flags) {
+            eyre::bail!("Terrain final readback differs at {x},{y}");
+        }
+        Ok(())
+    })?;
+    Ok(TerrainApplyOutcome {
+        remaining: remaining.as_ref().and_then(|mask| area.remaining_blob(mask)),
+        loaded: true,
+    })
+}
+
+#[cfg(target_arch = "x86")]
+struct LiveTerrainGrid<'a> {
+    state: &'a ParticleWorldState,
+    fns: &'a WorldFns,
+}
+
+#[cfg(target_arch = "x86")]
+impl LiveTerrainGrid<'_> {
+    fn slot(&self, x: i32, y: i32) -> eyre::Result<*mut *mut ntypes::Cell> {
+        // Re-read the LIVE chunk table for every slot, including readback.
+        // No cached load result or cell pointer can hide unload during writes.
+        // Direct requires both the byte-for-byte function guard and the live
+        // area cross-check below; hooked/unknown functions keep the game path.
+        let slot = if self.fns.cell_access == CellAccess::Direct {
+            let cells = unsafe { chunk_cells(self.state.chunk_map_ptr, x, y) };
+            if cells.is_null() {
+                eyre::bail!("Terrain chunk unloaded during application at {x},{y}");
+            }
+            unsafe { cell_slot(cells, x, y) }
+        } else {
+            if !unsafe { (self.fns.chunk_loaded)(self.state.chunk_map_ptr, x, y) } {
+                eyre::bail!("Terrain chunk unloaded during application at {x},{y}");
+            }
+            unsafe { (self.fns.get_cell)(self.state.chunk_map_ptr, x, y) }
+        };
+        if slot.is_null() {
+            eyre::bail!("Terrain get_cell returned a null slot at {x},{y}");
+        }
+        Ok(slot)
+    }
+}
+
+#[cfg(target_arch = "x86")]
+impl TerrainGrid for LiveTerrainGrid<'_> {
+    fn loaded(&mut self, x: i32, y: i32) -> eyre::Result<bool> {
+        Ok(unsafe { (self.fns.chunk_loaded)(self.state.chunk_map_ptr, x, y) })
+    }
+
+    fn read(&mut self, x: i32, y: i32) -> eyre::Result<Option<TerrainCell>> {
+        let pointer = unsafe { *self.slot(x, y)? };
+        let Some(cell) = (unsafe { pointer.as_ref() }) else {
+            return Ok(None);
+        };
+        let kind = ParticleWorldState::cell_type_of(cell)
+            .ok_or_else(|| eyre::eyre!("Terrain cell has no material at {x},{y}"))?;
+        let flags = if kind == ntypes::CellType::Liquid {
+            u8::from(unsafe { (*pointer.cast::<ntypes::LiquidCell>()).is_static })
+        } else {
+            0
+        };
+        Ok(Some(TerrainCell {
+            material: self.state.material_id_of(cell),
+            kind,
+            flags,
+        }))
+    }
+
+    fn remove(&mut self, x: i32, y: i32) -> eyre::Result<()> {
+        let pointer = unsafe { *self.slot(x, y)? };
+        if pointer.is_null() {
+            eyre::bail!("Terrain cell disappeared before removal at {x},{y}");
+        }
+        unsafe { (self.fns.remove_cell)(self.state._world_ptr, pointer.cast(), x, y, false) };
+        Ok(())
+    }
+
+    fn construct(&mut self, x: i32, y: i32, material: i16, flags: u8) -> eyre::Result<()> {
+        let pointer = unsafe {
+            (self.fns.construct_cell)(
+                self.state._world_ptr,
+                x,
+                y,
+                self.state.material_ptr(material),
+                std::ptr::null_mut(),
+            )
+        };
+        if pointer.is_null() {
+            eyre::bail!("Terrain constructor returned no cell at {x},{y}");
+        }
+        if ParticleWorldState::cell_type_of(unsafe { &*pointer }) == Some(ntypes::CellType::Liquid)
+        {
+            unsafe {
+                (*pointer.cast::<ntypes::LiquidCell>()).is_static = flags == LIQUID_FLAG_STATIC
+            };
+        }
+        unsafe { *self.slot(x, y)? = pointer };
+        Ok(())
+    }
+
+    fn set_liquid_flags(&mut self, x: i32, y: i32, flags: u8) -> eyre::Result<()> {
+        let pointer = unsafe { *self.slot(x, y)? };
+        if pointer.is_null() {
+            eyre::bail!("Terrain liquid disappeared before flag update at {x},{y}");
+        }
+        unsafe { (*pointer.cast::<ntypes::LiquidCell>()).is_static = flags == LIQUID_FLAG_STATIC };
+        Ok(())
+    }
+}
+
 /// Compare the direct ChunkMap walk with the game's chunk_loaded and get_cell
 /// for every cell of an area. Returns how many loaded cells were compared, or
 /// `None` on the first disagreement.
@@ -280,8 +628,9 @@ unsafe fn cross_check_cell_access(
     (x1, y1): (i32, i32),
 ) -> Option<usize> {
     let mut compared = 0;
-    for y in y0..y1 {
-        for x in x0..x1 {
+    // Inclusive bounds allow a valid aligned chunk ending at i32::MAX.
+    for y in y0..=y1 {
+        for x in x0..=x1 {
             // SAFETY: chunk_map is the live ChunkMap; get_cell is only called
             // once the game itself says the chunk is loaded.
             unsafe {
@@ -326,6 +675,79 @@ impl ParticleWorldState {
         unsafe { Some(cell.material_ptr().as_ref()?.cell_type) }
     }
 
+    /// Strict local-protocol application boundary. No remaining means complete;
+    /// remaining contains only unresolved requirements. Unloaded returns the exact input
+    /// before writes. Physical solid conflicts retain their individual targets
+    /// without rewriting completed cells on later attempts. Unexpected runtime
+    /// failures remain errors and must not be acknowledged or blindly retried.
+    ///
+    /// # Safety
+    ///
+    /// As for `decode_area`: the game main thread and live resolved functions.
+    #[cfg(target_arch = "x86")]
+    pub(crate) unsafe fn apply_terrain(
+        &mut self,
+        data: &[u8],
+        fns: &mut WorldFns,
+    ) -> eyre::Result<TerrainApplyOutcome> {
+        let area = TerrainArea::parse(data, fns.last_material_id)?;
+        if self.material_list_ptr.is_null() {
+            eyre::bail!("Terrain material list is not initialized");
+        }
+        // Validate target material types before mutation too. The capture
+        // projection cannot represent box2d/None as nonzero synchronized cells.
+        for run in area.runs.chunks_exact(5) {
+            let material = i16::from_le_bytes([run[2], run[3]]);
+            if material <= 0 {
+                continue;
+            }
+            let target = unsafe { self.material_ptr(material).as_ref() }
+                .ok_or_else(|| eyre::eyre!("Terrain material pointer is null"))?;
+            if !matches!(
+                target.cell_type,
+                ntypes::CellType::Liquid | ntypes::CellType::Gas | ntypes::CellType::Fire
+            ) {
+                eyre::bail!("Terrain material {material} is not a synchronized cell type");
+            }
+            if target.cell_type != ntypes::CellType::Liquid && run[4] != 0 {
+                eyre::bail!("Terrain non-liquid material {material} has liquid flags");
+            }
+        }
+        if fns.cell_access == CellAccess::DirectUnverified {
+            // Before any mutation, compare the code-guarded direct walk with
+            // the actual game functions on this entire validated area.
+            match unsafe {
+                cross_check_cell_access(
+                    self.chunk_map_ptr,
+                    fns,
+                    (area.x, area.y),
+                    (area.x + 127, area.y + 127),
+                )
+            } {
+                None => {
+                    fns.cell_access = CellAccess::Game;
+                    println!("Strict terrain cell access: game (live cross-check mismatch)");
+                }
+                Some(0) => {} // Unloaded: defer and compare a later live area.
+                Some(cells) => {
+                    fns.cell_access = CellAccess::Direct;
+                    println!("Strict terrain cell access: direct ({cells} cells cross-checked)");
+                }
+            }
+        }
+        apply_terrain_grid(&area, &mut LiveTerrainGrid { state: self, fns })
+    }
+
+    #[cfg(not(target_arch = "x86"))]
+    pub(crate) unsafe fn apply_terrain(
+        &mut self,
+        data: &[u8],
+        fns: &WorldFns,
+    ) -> eyre::Result<TerrainApplyOutcome> {
+        let _ = TerrainArea::parse(data, fns.last_material_id)?;
+        eyre::bail!("Terrain application is only implemented for 32-bit x86 (Noita's target)")
+    }
+
     /// Apply an encoded area to the live world.
     ///
     /// `data` must be the full `EncodedArea` blob as produced by `encode_area`:
@@ -361,7 +783,7 @@ impl ParticleWorldState {
                     chunk_map,
                     fns,
                     (top_left_x, top_left_y),
-                    (bottom_right_x, bottom_right_y),
+                    (bottom_right_x - 1, bottom_right_y - 1),
                 )
             };
             match checked {
@@ -612,6 +1034,383 @@ mod tests {
     fn rejects_zero_runs() {
         let data = blob(header(0), &[]);
         assert!(parse_encoded_area(&data).is_err());
+    }
+
+    fn terrain_blob(runs: &[(u16, u16, u8)]) -> Vec<u8> {
+        blob(
+            header(runs.len() as u16),
+            &runs
+                .iter()
+                .map(|&(length, material, flags)| NoitaPixelRun {
+                    length,
+                    material,
+                    flags,
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn liquid(material: i16, flags: u8) -> TerrainCell {
+        TerrainCell {
+            material,
+            kind: ntypes::CellType::Liquid,
+            flags,
+        }
+    }
+
+    struct TestTerrainGrid {
+        cells: Vec<Option<TerrainCell>>,
+        is_loaded: bool,
+        loaded_calls: usize,
+        unload_after_preflight: bool,
+        remove_fails: bool,
+        construct_fails: bool,
+        damage_previous: bool,
+        removals: usize,
+        constructions: usize,
+        flag_changes: usize,
+    }
+
+    impl Default for TestTerrainGrid {
+        fn default() -> Self {
+            Self {
+                cells: vec![None; 128 * 128],
+                is_loaded: true,
+                loaded_calls: 0,
+                unload_after_preflight: false,
+                remove_fails: false,
+                construct_fails: false,
+                damage_previous: false,
+                removals: 0,
+                constructions: 0,
+                flag_changes: 0,
+            }
+        }
+    }
+
+    impl TerrainGrid for TestTerrainGrid {
+        fn loaded(&mut self, _: i32, _: i32) -> eyre::Result<bool> {
+            self.loaded_calls += 1;
+            Ok(self.is_loaded && !(self.unload_after_preflight && self.loaded_calls > 2))
+        }
+        fn read(&mut self, x: i32, y: i32) -> eyre::Result<Option<TerrainCell>> {
+            Ok(self.cells[x as usize + y as usize * 128])
+        }
+        fn remove(&mut self, x: i32, y: i32) -> eyre::Result<()> {
+            self.removals += 1;
+            if !self.remove_fails {
+                self.cells[x as usize + y as usize * 128] = None;
+            }
+            Ok(())
+        }
+        fn construct(&mut self, x: i32, y: i32, material: i16, flags: u8) -> eyre::Result<()> {
+            self.constructions += 1;
+            if !self.construct_fails {
+                self.cells[x as usize + y as usize * 128] = Some(liquid(material, flags));
+            }
+            if self.damage_previous && self.constructions == 2 {
+                self.cells[0] = None;
+            }
+            Ok(())
+        }
+        fn set_liquid_flags(&mut self, x: i32, y: i32, flags: u8) -> eyre::Result<()> {
+            self.flag_changes += 1;
+            self.cells[x as usize + y as usize * 128]
+                .as_mut()
+                .unwrap()
+                .flags = flags;
+            Ok(())
+        }
+    }
+
+    fn apply_test(data: &[u8], grid: &mut TestTerrainGrid) -> eyre::Result<TerrainApplyOutcome> {
+        let area = TerrainArea::parse(data, 10)?;
+        apply_terrain_grid(&area, grid)
+    }
+
+    #[test]
+    fn terrain_validator_requires_exact_chunk_and_run_extent() {
+        let valid = terrain_blob(&[(16383, 0, 0)]);
+        assert!(TerrainArea::parse(&valid, 10).is_ok());
+        for invalid in [
+            terrain_blob(&[(16382, 0, 0)]),
+            terrain_blob(&[(16384, 0, 0)]),
+            terrain_blob(&[(16383, 0, 0), (0, 0, 0)]),
+        ] {
+            assert!(TerrainArea::parse(&invalid, 10).is_err());
+        }
+        let mut trailing = valid.clone();
+        trailing.push(0);
+        assert!(TerrainArea::parse(&trailing, 10).is_err());
+        let mut unaligned = valid.clone();
+        unaligned[0] = 1;
+        assert!(TerrainArea::parse(&unaligned, 10).is_err());
+        let mut dimensions = valid.clone();
+        dimensions[8] = 126;
+        assert!(TerrainArea::parse(&dimensions, 10).is_err());
+        let mut negative_aligned = valid.clone();
+        negative_aligned[..4].copy_from_slice(&(-128i32).to_le_bytes());
+        assert!(TerrainArea::parse(&negative_aligned, 10).is_ok());
+    }
+
+    #[test]
+    fn terrain_validator_rejects_invalid_late_material_and_flags_before_writes() {
+        for invalid in [
+            terrain_blob(&[(0, 6, 0), (16382, 11, 0)]),
+            terrain_blob(&[(16383, (-2i16) as u16, 0)]),
+            terrain_blob(&[(16383, 6, 2)]),
+            terrain_blob(&[(16383, 0, 1)]),
+        ] {
+            let mut grid = TestTerrainGrid::default();
+            assert!(apply_test(&invalid, &mut grid).is_err());
+            assert_eq!(grid.loaded_calls + grid.removals + grid.constructions, 0);
+        }
+    }
+
+    #[test]
+    fn terrain_unloaded_air_defers_without_any_mutation() {
+        let mut grid = TestTerrainGrid {
+            is_loaded: false,
+            ..Default::default()
+        };
+        grid.cells[0] = Some(liquid(6, 0));
+        let original = terrain_blob(&[(16383, 0, 0)]);
+        let outcome = apply_test(&original, &mut grid).unwrap();
+        assert!(
+            !outcome.loaded,
+            "unloaded deferral must suppress the entire sample"
+        );
+        assert_eq!(outcome.remaining, Some(original));
+        assert_eq!(grid.removals + grid.constructions + grid.flag_changes, 0);
+        assert_eq!(grid.cells[0].unwrap().material, 6);
+    }
+
+    #[test]
+    fn terrain_air_removal_and_equal_air_complete_without_construction() {
+        let mut grid = TestTerrainGrid::default();
+        grid.cells[0] = Some(liquid(6, 0));
+        let outcome = apply_test(&terrain_blob(&[(16383, 0, 0)]), &mut grid).unwrap();
+        assert!(outcome.loaded && outcome.remaining.is_none());
+        assert!(grid.cells.iter().all(Option::is_none));
+        assert_eq!(grid.removals, 1);
+        assert_eq!(grid.constructions, 0);
+        assert!(
+            apply_test(&terrain_blob(&[(16383, 0, 0)]), &mut grid)
+                .unwrap()
+                .remaining
+                .is_none()
+        );
+        assert_eq!(grid.removals, 1);
+    }
+
+    #[test]
+    fn terrain_unknown_cells_are_preserved_and_do_not_require_writes() {
+        let mut grid = TestTerrainGrid::default();
+        grid.cells[1] = Some(liquid(6, 1));
+        assert!(
+            apply_test(&terrain_blob(&[(0, 0, 0), (16382, u16::MAX, 1)]), &mut grid)
+                .unwrap()
+                .remaining
+                .is_none()
+        );
+        assert_eq!(grid.cells[1].unwrap().material, 6);
+        assert_eq!(grid.cells[1].unwrap().flags, 1);
+        assert_eq!(grid.removals + grid.constructions + grid.flag_changes, 0);
+    }
+
+    #[test]
+    fn terrain_unknown_unloaded_is_vacuously_complete_without_writes() {
+        let mut grid = TestTerrainGrid {
+            is_loaded: false,
+            ..Default::default()
+        };
+        grid.cells[0] = Some(liquid(6, 1));
+        let outcome = apply_test(&terrain_blob(&[(16383, u16::MAX, 1)]), &mut grid).unwrap();
+        assert!(!outcome.loaded);
+        assert!(
+            outcome.remaining.is_none(),
+            "no requirement may remain queued"
+        );
+        assert_eq!(grid.removals + grid.constructions + grid.flag_changes, 0);
+        assert_eq!(
+            (
+                grid.cells[0].unwrap().material,
+                grid.cells[0].unwrap().flags
+            ),
+            (6, 1)
+        );
+    }
+
+    #[test]
+    fn terrain_existing_liquid_flags_are_applied_and_verified() {
+        let mut grid = TestTerrainGrid::default();
+        grid.cells[0] = Some(liquid(6, 0));
+        assert!(
+            apply_test(&terrain_blob(&[(0, 6, 1), (16382, u16::MAX, 1)]), &mut grid)
+                .unwrap()
+                .remaining
+                .is_none()
+        );
+        assert_eq!(grid.cells[0].unwrap().flags, 1);
+        assert_eq!(grid.constructions + grid.removals, 0);
+        assert_eq!(grid.flag_changes, 1);
+    }
+
+    #[test]
+    fn terrain_failed_removal_and_construction_are_errors_not_deferrals() {
+        let mut removal = TestTerrainGrid {
+            remove_fails: true,
+            ..Default::default()
+        };
+        removal.cells[0] = Some(liquid(5, 0));
+        assert!(
+            apply_test(
+                &terrain_blob(&[(0, 0, 0), (16382, u16::MAX, 1)]),
+                &mut removal
+            )
+            .is_err()
+        );
+        let mut constructor = TestTerrainGrid {
+            construct_fails: true,
+            ..Default::default()
+        };
+        constructor.cells[0] = Some(liquid(5, 0));
+        assert!(
+            apply_test(
+                &terrain_blob(&[(0, 6, 0), (16382, u16::MAX, 1)]),
+                &mut constructor
+            )
+            .is_err()
+        );
+        assert_eq!(constructor.removals, 1);
+        assert!(
+            constructor.cells[0].is_none(),
+            "partial work stays a fault, not an ACK or retry"
+        );
+    }
+
+    #[test]
+    fn terrain_solid_projection_accepts_air_but_retains_nonzero_without_removal() {
+        let mut grid = TestTerrainGrid::default();
+        grid.cells[0] = Some(TerrainCell {
+            material: 9,
+            kind: ntypes::CellType::Solid,
+            flags: 0,
+        });
+        assert!(
+            apply_test(&terrain_blob(&[(0, 0, 0), (16382, u16::MAX, 1)]), &mut grid)
+                .unwrap()
+                .remaining
+                .is_none()
+        );
+        let required = terrain_blob(&[(0, 6, 0), (16382, u16::MAX, 1)]);
+        let remaining = apply_test(&required, &mut grid)
+            .unwrap()
+            .remaining
+            .expect("solid target stays pending");
+        assert_eq!(remaining, required);
+        assert_eq!(grid.removals + grid.constructions, 0);
+    }
+
+    #[test]
+    fn terrain_partial_completion_never_reasserts_completed_cells_over_later_edits() {
+        let mut grid = TestTerrainGrid::default();
+        grid.cells[0] = Some(liquid(5, 0));
+        grid.cells[1] = Some(TerrainCell {
+            material: 9,
+            kind: ntypes::CellType::Solid,
+            flags: 0,
+        });
+        let required = terrain_blob(&[(1, 6, 0), (16381, u16::MAX, 1)]);
+        let outcome = apply_test(&required, &mut grid).unwrap();
+        assert!(
+            outcome.loaded,
+            "a physical solid is distinct from unloaded terrain"
+        );
+        let remaining = outcome.remaining.expect("one cell is blocked");
+        assert_eq!(
+            remaining,
+            terrain_blob(&[(0, u16::MAX, 1), (0, 6, 0), (16381, u16::MAX, 1)])
+        );
+        assert_eq!(grid.cells[0].unwrap().material, 6);
+        assert_eq!((grid.removals, grid.constructions), (1, 1));
+
+        // This is a legitimate edit after the first cell's application. Only
+        // the remaining required mask may be attempted again.
+        grid.cells[0] = Some(liquid(7, 0));
+        for _ in 0..3 {
+            assert_eq!(
+                apply_test(&remaining, &mut grid)
+                    .unwrap()
+                    .remaining
+                    .as_ref(),
+                Some(&remaining)
+            );
+            assert_eq!((grid.removals, grid.constructions), (1, 1));
+            assert_eq!(grid.cells[0].unwrap().material, 7);
+        }
+        grid.cells[1] = None; // The physical box2d body has now vacated.
+        assert!(
+            apply_test(&remaining, &mut grid)
+                .unwrap()
+                .remaining
+                .is_none()
+        );
+        assert_eq!(grid.cells[0].unwrap().material, 7);
+        assert_eq!(grid.cells[1].unwrap().material, 6);
+        assert_eq!((grid.removals, grid.constructions), (1, 2));
+    }
+
+    #[test]
+    fn terrain_remaining_mask_is_bounded_valid_and_never_contains_completed_targets() {
+        let mut grid = TestTerrainGrid::default();
+        for index in (0..128 * 128).step_by(2) {
+            grid.cells[index] = Some(TerrainCell {
+                material: 9,
+                kind: ntypes::CellType::Solid,
+                flags: 0,
+            });
+        }
+        let remaining = apply_test(&terrain_blob(&[(16383, 6, 1)]), &mut grid)
+            .unwrap()
+            .remaining
+            .unwrap();
+        assert_eq!(
+            remaining.len(),
+            12 + 128 * 128 * 5,
+            "alternating unresolved/unknown is the exact worst case"
+        );
+        let validated = TerrainArea::parse(&remaining, 10).unwrap();
+        let mut required_count = 0;
+        validated
+            .visit_required(|x, y, material, flags| {
+                assert_eq!((x + y * 128) % 2, 0);
+                assert_eq!((material, flags), (6, 1));
+                required_count += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(required_count, 128 * 128 / 2);
+    }
+
+    #[test]
+    fn terrain_final_readback_catches_later_mutation_of_an_earlier_cell() {
+        let mut grid = TestTerrainGrid {
+            damage_previous: true,
+            ..Default::default()
+        };
+        assert!(apply_test(&terrain_blob(&[(1, 6, 0), (16381, u16::MAX, 1)]), &mut grid).is_err());
+        assert_eq!(grid.constructions, 2);
+    }
+
+    #[test]
+    fn terrain_unload_after_mutation_is_a_fault_not_a_retryable_deferral() {
+        let mut grid = TestTerrainGrid {
+            unload_after_preflight: true,
+            ..Default::default()
+        };
+        assert!(apply_test(&terrain_blob(&[(0, 6, 0), (16382, u16::MAX, 1)]), &mut grid).is_err());
+        assert_eq!(grid.constructions, 1);
     }
 
     /// Counts the lookups `ChunkCache` makes over an area, walked in the same

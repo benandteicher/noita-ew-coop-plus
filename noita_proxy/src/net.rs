@@ -25,7 +25,7 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
-use world::{NoitaWorldUpdate, WorldManager};
+use world::WorldManager;
 
 use crate::lobby_code::LobbyKind;
 use crate::mod_manager::get_mods;
@@ -37,6 +37,7 @@ use crate::steam_helper::LobbyExtraData;
 use crate::{
     AudioSettings, DefaultSettings, GameSettings,
     bookkeeping::save_state::{SaveState, SaveStateEntry},
+    bookkeeping::run_settings::{self,SessionRules,RuleAdvertisement,RunIntent,SavedRunSettings,WorldReceipt},
     game_settings::{GameMode, LocalHealthMode},
 };
 use shared::des::ProxyToDes;
@@ -46,6 +47,12 @@ mod audio;
 mod des;
 pub mod messages;
 mod proxy_opt;
+#[cfg(test)]
+mod terrain_delivery_tests;
+#[cfg(test)]
+mod network_resource_tests;
+#[cfg(test)]
+mod session_rules_tests;
 pub mod steam_networking;
 pub mod world;
 
@@ -91,16 +98,43 @@ pub(crate) struct NetInnerState {
     explosion_data: Vec<ExplosionData>,
     had_a_disconnect: bool,
     flags: FxHashSet<String>,
+    local_world_ready: bool,
+    initializing_local: bool,
+    gated_outbound: Vec<Vec<u8>>,
+    gated_inbound: Vec<Vec<u8>>,
+    gate_bytes:usize,gate_started:Option<Instant>,gate_error:Option<String>,
 }
+const MAX_WORLD_GATE_BYTES:usize=64*1024*1024;
+const MAX_WORLD_GATE_MESSAGES:usize=8192;
+struct SessionSaveGuard {state:SaveState,successful:bool}
+impl Drop for SessionSaveGuard {fn drop(&mut self){if !self.successful || thread::panicking(){self.state.mark_game_not_started();}}}
 
 impl NetInnerState {
+    fn disconnect_local(&mut self) {
+        self.ms = None;
+        self.had_a_disconnect = true;
+        self.gated_outbound.clear();self.gated_inbound.clear();self.initializing_local=false;self.gate_bytes=0;self.gate_started=None;
+        // Invalidate all transport-queued tokens before any more game input.
+        // A partial write/failed flush may have delivered only a batch prefix.
+        self.world.terrain_connection_reset();
+    }
+
+    fn flush_local(&mut self) {
+        if let Some(ws) = &mut self.ms
+            && let Err(err) = ws.flush()
+        {
+            warn!("Websocket flush not ok: {err}");
+            self.disconnect_local();
+        }
+    }
+
     pub(crate) fn try_ms_write(&mut self, data: &NoitaInbound) {
+        if self.ms.is_some() && !self.local_world_ready && !self.initializing_local {self.hold_world_message(bitcode::encode(data),false);return;}
         if let Some(ws) = &mut self.ms
             && let Err(err) = ws.write(data)
         {
             error!("Error occurred while sending to websocket: {}", err);
-            self.ms = None;
-            self.had_a_disconnect = true;
+            self.disconnect_local();
         };
     }
     pub(crate) fn try_ws_write_option(&mut self, key: &str, value: impl ProxyOpt) {
@@ -109,6 +143,12 @@ impl NetInnerState {
         value.write_opt(&mut buf, key);
         let message = NoitaInbound::RawMessage(buf);
         self.try_ms_write(&message);
+    }
+    fn hold_world_message(&mut self,bytes:Vec<u8>,inbound:bool) {
+        if self.gate_bytes.saturating_add(bytes.len())>MAX_WORLD_GATE_BYTES || self.gated_inbound.len()+self.gated_outbound.len()>=MAX_WORLD_GATE_MESSAGES {
+            self.gate_error=Some("World/rules receipt did not complete before the startup quarantine limit. The session stopped without accepting gameplay or resetting the checkpoint.".into());self.disconnect_local();return;
+        }
+        self.gate_bytes+=bytes.len();if inbound{self.gated_inbound.push(bytes);}else{self.gated_outbound.push(bytes);}
     }
 }
 
@@ -209,6 +249,7 @@ pub struct NetManagerInit {
 pub struct NetManager {
     pub peer: omni::PeerVariant,
     pub pending_settings: Mutex<GameSettings>,
+    pub session_rules: Mutex<SessionRules>,
     pub settings: Mutex<GameSettings>,
     pub continue_running: AtomicBool,
     pub accept_local: AtomicBool,
@@ -255,6 +296,7 @@ impl NetManager {
         Self {
             peer,
             pending_settings: Mutex::new(GameSettings::default()),
+            session_rules: Mutex::new(SessionRules::default()),
             settings: Mutex::new(GameSettings::default()),
             continue_running: AtomicBool::new(true),
             accept_local: AtomicBool::new(false),
@@ -310,7 +352,7 @@ impl NetManager {
         } else {
             let encoded = lz4_flex::compress_prepend_size(&bitcode::encode(msg));
             let len = encoded.len();
-            if let Err(err) = self.peer.send(peer, encoded.clone(), reliability) {
+            if let Err(err) = self.peer.send(peer, encoded, reliability) {
                 if cfg!(debug_assertions) {
                     warn!(
                         "Error while sending message of len {}: {} {:?}",
@@ -437,8 +479,10 @@ impl NetManager {
             des: DesManager::new(is_host, self.init_settings.save_state.clone()),
             had_a_disconnect: false,
             flags: self.init_settings.save_state.load().unwrap_or_default(),
+            local_world_ready: crate::frozen_runtime::ID.is_none(),initializing_local:false,gated_outbound:Vec::new(),gated_inbound:Vec::new(),gate_bytes:0,gate_started:None,gate_error:None,
             audio: audio_state,
         };
+        let mut save_guard=SessionSaveGuard {state:self.init_settings.save_state.clone(),successful:false};
         let mut last_iter = Instant::now();
         let path = crate::player_path(self.init_settings.paths.noita_quantew_install.clone());
         let player_image = if path.exists() {
@@ -487,23 +531,28 @@ impl NetManager {
                 .store(state.ms.is_some(), Ordering::Relaxed);
             if state.ms.is_none() && self.accept_local.load(Ordering::SeqCst) {
                 thread::sleep(Duration::from_millis(10));
-                if let Ok((stream, addr)) = local_server.accept() {
+                if let Ok((mut stream, addr)) = local_server.accept() {
                     info!("New stream incoming from {}", addr);
                     stream.set_nodelay(true).ok();
                     stream.set_nonblocking(false).ok();
+                    if let Err(err) = shared::terrain_protocol::negotiate(&mut stream) {
+                        error!("Local protocol negotiation failed: {err}; use matching proxy/ewext/Lua");
+                        continue;
+                    }
+                    state.world.terrain_connection_reset();
+                    state.local_world_ready=crate::frozen_runtime::ID.is_none();state.gated_outbound.clear();state.gated_inbound.clear();state.gate_bytes=0;state.gate_error=None;
                     state.ms = MessageSocket::new(stream)
                         .inspect_err(|e| error!("Could not init websocket: {:?}", e))
                         .ok();
                     if state.ms.is_some() {
-                        self.on_ms_connection(&mut state);
+                        if let Err(error)=self.on_ms_connection(&mut state) {
+                            if error.kind()==io::ErrorKind::WouldBlock {state.disconnect_local();}
+                            else {self.fail_agreement("world-connection-preparation-failed",format!("Cannot prepare game session: {error}"),Some(&mut state));}
+                        }
                     }
                 }
             }
-            if let Some(ws) = &mut state.ms
-                && let Err(err) = ws.flush()
-            {
-                warn!("Websocket flush not ok: {err}");
-            }
+            state.flush_local();
             // Scoped so the locks are released before handling network events, which may kick.
             {
                 let mut to_kick = self.kick_list.lock().unwrap();
@@ -570,8 +619,7 @@ impl NetManager {
                     Ok(None) => break,
                     Err(err) => {
                         warn!("Game closed (Lost connection to noita instance: {})", err);
-                        state.had_a_disconnect = true;
-                        state.ms = None;
+                        state.disconnect_local();
                     }
                 }
             }
@@ -580,9 +628,17 @@ impl NetManager {
             }
             state.world.update();
 
-            let updates = state.world.get_noita_updates();
-            for update in updates {
-                state.try_ms_write(&ws_encode_proxy_bin(0, &update));
+            if state.ms.is_some() && state.local_world_ready {
+                match state.world.get_terrain_updates() {
+                    Ok(updates) => for update in updates {
+                        state.try_ms_write(&ws_encode_proxy_bin(2, &update.encode(state.world.world_number(), state.world.terrain_session())));
+                        if state.ms.is_none() { break; }
+                    },
+                    Err(err) => {
+                        error!("Terrain session stopped: {err}");
+                        state.disconnect_local();
+                    }
+                }
             }
 
             if state.had_a_disconnect {
@@ -667,9 +723,11 @@ impl NetManager {
             if elapsed < min_update_time {
                 thread::sleep(min_update_time - elapsed);
             }
+            if state.ms.is_some() && !state.local_world_ready && state.gate_started.is_some_and(|started|started.elapsed()>Duration::from_secs(120)) {state.gate_error=Some("No actual world/rules receipt arrived within 120 seconds. Startup stopped without accepting gameplay or resetting the checkpoint.".into());state.disconnect_local();}
+            self.consume_gate_failure(&mut state);
             last_iter = Instant::now();
         }
-        Ok(())
+        save_guard.successful=true;Ok(())
     }
     fn handle_network_event(
         self: Arc<NetManager>,
@@ -693,6 +751,7 @@ impl NetManager {
                         },
                         Reliability::Reliable,
                     );
+                    if crate::frozen_runtime::ID.is_some(){self.send(id,&NetMsg::SessionRules(self.rule_advertisement()),Reliability::Reliable);}
                 }
                 if id != self.peer.my_id() {
                     // Create temporary appearance files for new player.
@@ -834,9 +893,10 @@ impl NetManager {
                 state.try_ms_write(&ws_encode_proxy("end_run", self.peer.my_id().to_string()))
             }
             NetMsg::StartGame { settings, init } => {
+                if src!=self.peer.host_id() {warn!("Ignoring non-host run settings from {src}");return;}
                 *self.settings.lock().unwrap() = settings;
                 info!("Settings updated");
-                self.accept_local.store(true, Ordering::SeqCst);
+                self.accept_local.store(crate::frozen_runtime::ID.is_none(), Ordering::SeqCst);
                 state.world.reset();
                 state.des.reset();
                 state.flags.clear();
@@ -844,6 +904,19 @@ impl NetManager {
                     self.reset_map.store(true, Ordering::Relaxed);
                 }
             }
+            NetMsg::SessionRules(advertisement)=>{
+                if src!=self.peer.host_id() || self.is_host(){warn!("Ignoring non-host session rules from {src}");return;}
+                let mut session=self.session_rules.lock().unwrap();
+                let changed_live=session.game_received && (session.run_id!=advertisement.run_id || session.rules_id!=advertisement.rules_id) && state.ms.is_some();
+                if changed_live {state.disconnect_local();}
+                let same=session.run_id==advertisement.run_id && session.rules_id==advertisement.rules_id;
+                if !same {*session=SessionRules::default();}
+                if changed_live {session.failure=Some("Host moved to a new run while the old local world remained open. Close that game and rejoin before starting the next run; no old checkpoint was reset.".into());}
+                session.run_id=advertisement.run_id;session.rules_id=advertisement.rules_id;session.locked=advertisement.locked;session.legacy_unverified=advertisement.legacy_unverified;
+                session.intent=if advertisement.legacy_unverified{RunIntent::Legacy}else{RunIntent::Join};
+                *self.settings.lock().unwrap()=advertisement.settings;
+                self.accept_local.store(advertisement.ready && !changed_live && session.failure.is_none(),Ordering::SeqCst);
+            },
             NetMsg::ModRaw { data } => {
                 state.try_ms_write(&ws_encode_mod(src, &data));
             }
@@ -999,11 +1072,102 @@ impl NetManager {
         }
     }
 
-    fn on_ms_connection(self: &Arc<NetManager>, state: &mut NetInnerState) {
+    fn rule_advertisement(&self)->RuleAdvertisement {
+        let session=self.session_rules.lock().unwrap();
+        RuleAdvertisement {settings:self.settings.lock().unwrap().clone(),run_id:session.run_id,rules_id:session.rules_id,locked:session.locked,ready:session.game_received && session.failure.is_none(),legacy_unverified:session.legacy_unverified}
+    }
+    /// Failure of an actual agreement, not an ordinary client waiting for its
+    /// host. Revoke save permission before any normal shutdown can drop state.
+    fn fail_agreement(&self,stage:&str,message:String,state:Option<&mut NetInnerState>) {
+        self.init_settings.save_state.mark_game_not_started();
+        let (message,first)={let mut session=self.session_rules.lock().unwrap_or_else(|poison|poison.into_inner());let first=session.failure.is_none();let message=session.failure.get_or_insert(message).clone();session.game_received=false;(message,first)};
+        self.accept_local.store(false,Ordering::SeqCst);
+        *self.error.lock().unwrap_or_else(|poison|poison.into_inner())=Some(io::Error::other(message.clone()));
+        if first {error!("{message}");crate::startup_diagnostics::failure(stage,&message);}else{crate::startup_diagnostics::event("world-agreement-failure-repeat",&format!("stage={stage} first_cause={message}"));}
+        if let Some(state)=state {state.initializing_local=true;state.try_ms_write(&ws_encode_proxy("coopplus_world_ack",0));state.initializing_local=false;state.flush_local();state.local_world_ready=false;state.disconnect_local();state.gate_error=None;}
+        if self.is_host() && crate::frozen_runtime::ID.is_some() && !self.session_rules.is_poisoned(){self.broadcast(&NetMsg::SessionRules(self.rule_advertisement()),Reliability::Reliable);}
+    }
+    fn consume_gate_failure(&self,state:&mut NetInnerState) {
+        if let Some(error)=state.gate_error.take(){self.fail_agreement("world-gate-failed",error,Some(state));}
+    }
+    fn report_preparation_failure(&self,error:&io::Error) {
+        if error.kind()!=io::ErrorKind::WouldBlock {self.fail_agreement("world-preparation-failed",format!("Cannot prepare game session: {error}"),None);}
+    }
+    pub(crate) fn apply_host_preferences(&self,draft:&GameSettings)->bool {
+        if !self.is_host(){return false;}
+        let mut session=self.session_rules.lock().unwrap();let current=self.settings.lock().unwrap().clone();
+        let mut pending=draft.clone();pending.world_num=current.world_num;pending.progress=current.progress.clone();
+        if !pending.use_constant_seed {pending.seed=current.seed;}
+        *self.pending_settings.lock().unwrap()=pending.clone();
+        let applied=!session.locked;
+        if applied {*self.settings.lock().unwrap()=pending.clone();session.refresh_draft();}
+        self.dirty.store(!applied && current!=pending,Ordering::Relaxed);
+        let advertisement=RuleAdvertisement {settings:if applied{pending}else{current},run_id:session.run_id,rules_id:session.rules_id,locked:session.locked,ready:session.game_received && session.failure.is_none(),legacy_unverified:session.legacy_unverified};
+        crate::startup_diagnostics::event("host-settings-transition",&format!("current_mode={} next_run_mode={} applied_now={} locked={} run_id={:016x} rules_id={:016x}",advertisement.settings.game_mode.unwrap_or(DefaultSettings::default().game_mode),draft.game_mode.unwrap_or(DefaultSettings::default().game_mode),applied,session.locked,session.run_id,session.rules_id));
+        drop(session);if applied && crate::frozen_runtime::ID.is_some(){self.broadcast(&NetMsg::SessionRules(advertisement),Reliability::Reliable);}
+        applied
+    }
+    pub(crate) fn prepare_game_launch(&self)->io::Result<()> {
+        let result=self.prepare_game_launch_inner();if let Err(error)=&result{self.report_preparation_failure(error);}result
+    }
+    fn prepare_game_launch_inner(&self)->io::Result<()> {
+        if crate::frozen_runtime::ID.is_none(){self.session_rules.lock().unwrap().locked=true;return Ok(());}
+        let mut session=self.session_rules.lock().unwrap();
+        if let Some(error)=&session.failure{return Err(io::Error::other(error.clone()));}
+        if !self.is_host() && (!session.locked || !self.accept_local.load(Ordering::SeqCst)){return Err(io::Error::new(io::ErrorKind::WouldBlock,"Wait for the host's actual Noita world to agree with the selected run settings."));}
+        if !session.launch_prepared {
+            let profile=self.init_settings.paths.noita_save.as_ref().ok_or_else(||io::Error::other("No explicit Noita profile for world identity"))?;
+            let stopped=run_settings::stopped_world_session(profile).map_err(|error|io::Error::new(io::ErrorKind::InvalidData,format!("Cannot validate stopped Noita world identity: {error}")))?;
+            session.prepare_stopped_identity(stopped,self.is_host())?;
+        }
+        session.locked=true;let advertisement=RuleAdvertisement {settings:self.settings.lock().unwrap().clone(),run_id:session.run_id,rules_id:session.rules_id,locked:true,ready:session.game_received && session.failure.is_none(),legacy_unverified:session.legacy_unverified};
+        crate::startup_diagnostics::event("host-settings-locked",&format!("mode={} intent={} stopped_local_session={} run_id={:016x} rules_id={:016x} legacy_unverified={}",advertisement.settings.game_mode.unwrap_or(DefaultSettings::default().game_mode),session.intent.as_str(),session.expected_session.as_deref().unwrap_or("absent"),session.run_id,session.rules_id,session.legacy_unverified));
+        drop(session);if self.is_host(){self.broadcast(&NetMsg::SessionRules(advertisement),Reliability::Reliable);}Ok(())
+    }
+    fn accept_world_receipt(&self,text:&str,state:&mut NetInnerState,sendm:&Sender<FxHashMap<u16,u32>>)->io::Result<()> {
+        let receipt=WorldReceipt::parse(text)?;let mut session=self.session_rules.lock().unwrap();let settings=self.settings.lock().unwrap().clone();
+        let already_received=session.game_received;
+        session.accept_receipt(&receipt,&settings,self.is_host())?;
+        if already_received {crate::startup_diagnostics::event("actual-world-receipt-repeat",&format!("kind={} boundary={} mode={} no_notplayer={} local_session={} run_id={:016x} rules_id={:016x} legacy_unverified={}",receipt.kind,receipt.boundary,receipt.mode,receipt.no_notplayer,receipt.session,session.run_id,session.rules_id,session.legacy_unverified));drop(session);state.try_ms_write(&ws_encode_proxy("coopplus_world_ack",1));return Ok(());}
+        if self.is_host() {
+            if session.intent==RunIntent::New {
+                self.init_settings.save_state.reset_checked()?;state.world.reset();state.des.reset();state.flags.clear();
+                self.chunk_map.lock().unwrap().clear();self.reset_map.store(true,Ordering::Relaxed);
+                // No peer game is permitted before host agreement. Anything
+                // queued outward here belongs to the retired pre-agreement
+                // generation; preserve local NEW-world input for FIFO replay.
+                state.gated_outbound.clear();
+            }
+            SavedRunSettings {schema:1,settings:settings.clone(),run_id:session.run_id,rules_id:session.rules_id,world_session:receipt.session.clone(),legacy_unverified:session.legacy_unverified}.save(self.init_settings.save_state.directory())?;
+        }
         self.init_settings.save_state.mark_game_started();
+        info!("Co-op+ actual world receipt accepted: kind={} mode={} no_notplayer={} session={} legacy_unverified={}",receipt.kind,receipt.mode,receipt.no_notplayer,receipt.session,session.legacy_unverified);
+        crate::startup_diagnostics::event("actual-world-receipt-accepted",&format!("kind={} boundary={} mode={} no_notplayer={} local_session={} run_id={:016x} rules_id={:016x} legacy_unverified={}",receipt.kind,receipt.boundary,receipt.mode,receipt.no_notplayer,receipt.session,session.run_id,session.rules_id,session.legacy_unverified));
+        if self.is_host() && !session.legacy_unverified {session.intent=RunIntent::Continue;}
+        session.launch_prepared=false;
+        drop(session);state.local_world_ready=true;state.gate_started=None;state.gate_bytes=0;
+        if self.is_host(){self.broadcast(&NetMsg::SessionRules(self.rule_advertisement()),Reliability::Reliable);}
+        state.try_ms_write(&ws_encode_proxy("coopplus_world_ack",1));
+        for bytes in std::mem::take(&mut state.gated_outbound) {let message=bitcode::decode::<NoitaInbound>(&bytes).map_err(|e|io::Error::other(e.to_string()))?;state.try_ms_write(&message);}
+        for bytes in std::mem::take(&mut state.gated_inbound) {let message=bitcode::decode::<NoitaOutbound>(&bytes).map_err(|e|io::Error::other(e.to_string()))?;self.handle_mod_message_2(message,state,sendm);}
+        Ok(())
+    }
+    fn on_ms_connection(self: &Arc<NetManager>, state: &mut NetInnerState)->io::Result<()> {
+        self.prepare_game_launch()?;
+        if crate::frozen_runtime::ID.is_none(){self.init_settings.save_state.mark_game_started();}
+        state.initializing_local=true;
+        state.gate_started=Some(Instant::now());state.gate_error=None;
         info!("New stream connected");
 
-        let settings = self.settings.lock().unwrap();
+        let settings = self.settings.lock().unwrap().clone();
+        if crate::frozen_runtime::ID.is_some() {
+            let session=self.session_rules.lock().unwrap();
+            state.try_ws_write_option("coopplus_run_id",format!("{:016x}",session.run_id).as_str());
+            state.try_ws_write_option("coopplus_rules_id",format!("{:016x}",session.rules_id).as_str());
+            state.try_ws_write_option("coopplus_expected_session",session.expected_session.as_deref().map(run_settings::hex_text).as_deref().unwrap_or("none"));
+            state.try_ws_write_option("coopplus_run_intent",session.intent.as_str());
+            state.try_ws_write_option("coopplus_expected_mode",settings.game_mode.unwrap_or(DefaultSettings::default().game_mode).to_string().as_str());
+        }
         let def = DefaultSettings::default();
         state.try_ms_write(&ws_encode_proxy("seed", settings.seed));
         let my_id = self.peer.my_id();
@@ -1196,7 +1360,9 @@ impl NetManager {
         state.try_ms_write(&NoitaInbound::Ready {
             my_peer_id: self.peer.my_id().into(),
         });
-        info!("Settings sent")
+        state.initializing_local=false;
+        info!("Settings sent; actual world receipt {}",if state.local_world_ready{"not required by this runtime"}else{"pending"});
+        Ok(())
     }
 
     fn handle_mod_message_2(
@@ -1205,6 +1371,10 @@ impl NetManager {
         state: &mut NetInnerState,
         sendm: &Sender<FxHashMap<u16, u32>>,
     ) {
+        if !state.local_world_ready {
+            let receipt=matches!(&msg,NoitaOutbound::Raw(raw) if raw.first().is_some_and(|tag|tag&3==1) && raw.get(1..).is_some_and(|body|body.starts_with(b"coopplus_world_receipt ")));
+            if !receipt {state.hold_world_message(bitcode::encode(&msg),true);return;}
+        }
         match msg {
             NoitaOutbound::Raw(raw_msg) => {
                 match raw_msg[0] & 0b11 {
@@ -1292,10 +1462,15 @@ impl NetManager {
     pub fn start(self: Arc<NetManager>, player_path: PathBuf) -> JoinHandle<()> {
         info!("Starting netmanager");
         thread::spawn(move || {
-            let result = self.clone().start_inner(player_path, None);
-            if let Err(err) = result {
-                error!("Error in netmanager: {}", err);
-                *self.error.lock().unwrap() = Some(err);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(||self.clone().start_inner(player_path, None)));
+            let error=match result {Ok(Ok(()))=>None,Ok(Err(error))=>Some(error),Err(payload)=>{
+                let text=payload.downcast_ref::<String>().map(String::as_str).or_else(||payload.downcast_ref::<&str>().copied()).unwrap_or("unknown panic payload");
+                Some(io::Error::other(format!("Network session stopped after a failure: {text}. Saved files were not reset; preserve the error and logs.")))
+            }};
+            if let Some(error)=error {
+                error!("Error in netmanager: {error}");
+                crate::startup_diagnostics::failure("network-session-failed",&error.to_string());
+                *self.error.lock().unwrap_or_else(|poison|poison.into_inner())=Some(error);
             }
             self.stopped.store(true, Ordering::Relaxed);
         })
@@ -1310,6 +1485,7 @@ impl NetManager {
             },
             Reliability::Reliable,
         );
+        if crate::frozen_runtime::ID.is_some(){self.broadcast(&NetMsg::SessionRules(self.rule_advertisement()),Reliability::Reliable);}
     }
 
     fn is_host(&self) -> bool {
@@ -1326,6 +1502,12 @@ impl NetManager {
         let mut msg = msg.split_ascii_whitespace();
         let key = msg.next();
         match key {
+            Some("coopplus_world_receipt")=>{
+                let text=msg.collect::<Vec<_>>().join(" ");
+                if let Err(error)=self.accept_world_receipt(&text,state,sendm) {
+                    self.fail_agreement("world-rules-refused",format!("World/rules agreement refused: {error}"),Some(state));
+                }
+            },
             Some("game_over") => {
                 if self.is_host() {
                     info!("Game over, resending game settings");
@@ -1516,29 +1698,56 @@ impl NetManager {
     }
 
     fn handle_bin_message_to_proxy(&self, msg: &[u8], state: &mut NetInnerState) {
+        if msg.is_empty() { return; }
         let key = msg[0];
         let data = &msg[1..];
-        match key {
+        let result: eyre::Result<()> = (|| { match key {
             // world frame
             0 => {
-                let update = NoitaWorldUpdate::load(data);
-                state.world.add_update(update);
+                state.world.add_terrain_update(data)?;
             }
             // world end
             1 => {
+                eyre::ensure!(!data.is_empty(), "Empty terrain END");
                 let pos = data[1..]
                     .split(|b| *b == b':')
-                    .map(|s| String::from_utf8_lossy(s).parse::<i32>().unwrap_or(0))
-                    .collect::<Vec<i32>>();
-                state.world.add_end(data[0], &pos);
+                    .map(|s| String::from_utf8_lossy(s).parse::<i32>())
+                    .collect::<Result<Vec<_>,_>>()?;
+                state.world.add_terrain_end(data[0], &pos)?;
+            }
+            2 => {
+                eyre::ensure!(data.len() == 12, "Invalid terrain ACK");
+                if u32::from_le_bytes(data[8..12].try_into()?) == state.world.terrain_session() {
+                    state.world.terrain_ack(u64::from_le_bytes(data[..8].try_into()?));
+                }
+            }
+            3 => {
+                eyre::ensure!(data.len() == 9 && data[0] == shared::terrain_protocol::VERSION, "Incompatible Lua terrain protocol");
+                state.world.terrain_hello(u32::from_le_bytes(data[1..5].try_into()?), i32::from_le_bytes(data[5..9].try_into()?))?;
+            }
+            4 => { eyre::bail!("Game terrain application failed: {}", String::from_utf8_lossy(data)); }
+            5 | 6 => {
+                eyre::ensure!(data.len() >= 12, "Invalid terrain progress receipt");
+                if u32::from_le_bytes(data[8..12].try_into()?) == state.world.terrain_session() {
+                    let token = u64::from_le_bytes(data[..8].try_into()?);
+                    if key == 5 { state.world.terrain_progress(token, &data[12..])?; }
+                    else { state.world.terrain_pause_ack(token, &data[12..])?; }
+                }
             }
             key => {
                 error!("Unknown bin msg from mod: {:?}", key)
             }
+        }; Ok(()) })();
+        if let Err(err) = result {
+            error!("Terrain protocol stopped: {err}");
+            state.ms = None;
+            state.had_a_disconnect = true;
         }
     }
 
     fn end_run(&self, state: &mut NetInnerState) {
+        let mut session=self.session_rules.lock().unwrap();
+        self.init_settings.save_state.mark_game_not_started();
         self.init_settings.save_state.reset();
         {
             let mut settings = self.pending_settings.lock().unwrap();
@@ -1561,6 +1770,8 @@ impl NetManager {
             self.reset_map.store(true, Ordering::Relaxed);
             self.dirty.store(false, Ordering::Relaxed);
         }
+        *session=SessionRules::default();drop(session);
+        state.local_world_ready=crate::frozen_runtime::ID.is_none();state.gated_outbound.clear();state.gated_inbound.clear();
         self.resend_game_settings();
     }
 }
@@ -1646,6 +1857,7 @@ pub enum LiquidType {
 
 impl Drop for NetManager {
     fn drop(&mut self) {
+        if !self.init_settings.save_state.game_started(){info!("No accepted current world to save; preserving the prior checkpoint");return;}
         if self.is_host() {
             let run_info = RunInfo {
                 seed: self.settings.lock().unwrap().seed,

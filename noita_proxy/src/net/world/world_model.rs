@@ -200,7 +200,7 @@ impl WorldModel {
                     chunk_coord = new_chunk_coord;
                     chunk = self.chunks.entry(chunk_coord).or_default();
                 }
-                if set_pixel(
+                if run.data.material != u16::MAX && set_pixel(
                     Pixel {
                         material: run.data.material,
                         flags,
@@ -330,6 +330,32 @@ impl WorldModel {
         }
     }
 
+    pub(super) fn mirror_chunk_delta(&mut self, delta: &ChunkDelta) {
+        let chunk = self.chunks.entry(delta.chunk_coord).or_default();
+        let mut offset = 0;
+        for run in delta.runs.iter() {
+            let end = (offset + run.length as usize).min(CHUNK_AREA);
+            if let Some(pixel) = run.data {
+                for ix in offset..end { chunk.cache_compact_pixel(ix, pixel); }
+            }
+            offset = end;
+            if offset == CHUNK_AREA { break; }
+        }
+    }
+
+    pub(super) fn mirror_chunk_data(&mut self, coord: ChunkCoord, data: &ChunkData) {
+        let chunk = self.chunks.entry(coord).or_default();
+        let mut offset = 0;
+        for run in &data.runs {
+            let end = (offset + run.length as usize).min(CHUNK_AREA);
+            if run.data != CompactPixel::default() {
+                for ix in offset..end { chunk.cache_compact_pixel(ix, run.data); }
+            }
+            offset = end;
+            if offset == CHUNK_AREA { break; }
+        }
+    }
+
     pub(crate) fn get_chunk_delta(
         &self,
         chunk_coord: ChunkCoord,
@@ -346,6 +372,28 @@ impl WorldModel {
 
     pub fn updated_chunks(&self) -> &FxHashSet<ChunkCoord> {
         &self.updated_chunks
+    }
+
+    pub(super) fn take_noita_update(&mut self, coord: ChunkCoord) -> Option<Vec<u8>> {
+        let data = self.peek_noita_update(coord);
+        self.clear_noita_update(coord);
+        data
+    }
+
+    /// Commit an already prepared update without serializing it a second time.
+    /// Call only after the caller has retained the prepared payload, or proved
+    /// there is no required write. The cached terrain itself is unchanged.
+    pub(super) fn clear_noita_update(&mut self, coord: ChunkCoord) {
+        self.updated_chunks.remove(&coord);
+        self.full_write_chunks.remove(&coord);
+        if let Some(chunk) = self.chunks.get_mut(&coord) { chunk.clear_changed(); }
+    }
+
+    pub(super) fn peek_noita_update(&self, coord: ChunkCoord) -> Option<Vec<u8>> {
+        if !self.updated_chunks.contains(&coord) { return None; }
+        if self.full_write_chunks.contains(&coord) {
+            Some(self.get_chunk_noita_update(coord).save())
+        } else { self.get_changed_noita_update(coord).map(|u| u.save()) }
     }
 
     /// Safe to call right after `get_all_noita_updates()`: that returns updates
@@ -593,5 +641,37 @@ mod tests {
         model.forget_chunk(coord);
         assert!(model.get_all_noita_updates().is_empty());
         assert!(model.full_write_chunks.is_empty());
+    }
+
+    #[test]
+    fn prepared_update_commit_preserves_cache_and_other_chunks_and_allows_identical_later_delta() {
+        let mut model = WorldModel::default();
+        let coord = ChunkCoord(0, 0);
+        let other = ChunkCoord(1, 0);
+        model.apply_chunk_data(coord, &ChunkData::new(6));
+        model.apply_chunk_data(other, &ChunkData::new(7));
+        let prepared = model.peek_noita_update(coord).unwrap();
+        assert!(materials(&prepared).iter().all(|m| *m == 6));
+        model.clear_noita_update(coord);
+        assert!(model.peek_noita_update(coord).is_none());
+        assert!(model.peek_noita_update(other).is_some());
+        assert_eq!(model.chunks[&coord].pixel(0).material, 6);
+
+        // A later assertion is required even when byte-identical to cached
+        // terrain. Clearing a prepared snapshot must not suppress that delta.
+        model.apply_chunk_delta(&ChunkDelta {
+            chunk_coord: coord,
+            runs: Arc::new(vec![
+                PixelRun { length: 1, data: Some(compact(6)) },
+                PixelRun { length: (CHUNK_AREA - 1) as u32, data: None },
+            ]),
+        });
+        let later = model.peek_noita_update(coord).unwrap();
+        let pixels = materials(&later);
+        assert_eq!(pixels[0], 6);
+        assert!(pixels[1..].iter().all(|m| *m == UNKNOWN));
+        assert_eq!(model.take_noita_update(coord), Some(later));
+        assert!(model.peek_noita_update(coord).is_none());
+        assert!(model.peek_noita_update(other).is_some());
     }
 }

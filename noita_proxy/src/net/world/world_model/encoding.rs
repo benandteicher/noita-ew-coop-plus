@@ -146,7 +146,9 @@ impl NoitaWorldUpdate {
             run_count: self.runs.len() as u16,
             ..self.header
         };
-        let mut buf = Vec::new();
+        // The wire size is exact. Prepared terrain buffers are retained until
+        // application, so avoid geometric spare capacity as well as growth.
+        let mut buf = Vec::with_capacity(size_of::<Header>() + self.runs.len() * 5);
         buf.extend_from_slice(bytes_of(&header));
 
         for run in &self.runs {

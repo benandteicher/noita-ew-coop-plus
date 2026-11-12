@@ -31,6 +31,8 @@ mod game_settings;
 mod player_settings;
 
 mod cli;
+pub mod frozen_runtime;
+pub mod startup_diagnostics;
 
 const DEFAULT_PORT: u16 = 5123;
 
@@ -69,6 +71,11 @@ impl Deref for NetManStopOnDrop {
 impl Drop for NetManStopOnDrop {
     fn drop(&mut self) {
         self.0.continue_running.store(false, Ordering::Relaxed);
-        self.1.take().unwrap().join().unwrap();
+        if let Some(handle) = self.1.take() {
+            if let Err(error) = handle.join() {
+                tracing::error!(?error, "Network worker failed while closing; saved state retained");
+                startup_diagnostics::failure("network-worker-join-failed", "Network worker panicked while closing. No state repair or restart was attempted.");
+            }
+        }
     }
 }

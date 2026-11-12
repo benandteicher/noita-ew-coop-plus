@@ -29,6 +29,8 @@ use super::{
 };
 
 pub mod world_model;
+mod terrain_barrier;
+pub(crate) use terrain_barrier::TerrainCommand;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum WorldUpdateKind {
@@ -154,7 +156,7 @@ enum ChunkState {
     /// Chunk is to be cleaned up.
     UnloadPending,
     /// We've requested to take authority from someone else, and waiting for transfer to complete.
-    Transfer,
+    Transfer { authority: OmniPeerId },
     /// Has higher priority and is waiting for next chunk update
     WantToGetAuth {
         authority: OmniPeerId,
@@ -189,6 +191,10 @@ pub(crate) struct WorldManager {
     chunk_storage: FxHashMap<ChunkCoord, ChunkData>,
     /// Who is the current chunk authority.
     authority_map: FxHashMap<ChunkCoord, (OmniPeerId, u8)>,
+    /// Host-local proof that arbitration is still transferring our own
+    /// authority to this successor. Never validates a remote old snapshot.
+    pending_local_transfers: FxHashMap<ChunkCoord, OmniPeerId>,
+    terrain: terrain_barrier::TerrainBarrier,
     /// Chunk states, according to docs/distributed_world_sync.drawio
     chunk_state: FxHashMap<ChunkCoord, ChunkState>,
     emitted_messages: Vec<MessageRequest<WorldNetMessage>>,
@@ -234,22 +240,42 @@ impl WorldManager {
         let (tx, recv) = mpsc::channel::<(ChunkCoord, ChunkData)>();
         let (tsx, recv2) = mpsc::channel::<(ChunkCoord, ChunkData)>();
         thread::spawn(move || {
+            #[cfg(test)]
+            let _map_worker_lifetime = map_worker_resource_tests::WorkerLifetime::enter();
             let mut mats = Default::default();
             let mut chunks = Vec::new();
+            let mut materials_closed = false;
+            let mut chunks_closed = false;
             loop {
-                while let Ok(mat) = rxm.try_recv() {
-                    mats = mat;
-                }
-                while let Ok((c, data)) = recv.try_recv() {
-                    if is_host {
-                        let _ = tsx.send((c, data.clone()));
+                while !materials_closed {
+                    match rxm.try_recv() {
+                        Ok(mat) => mats = mat,
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => materials_closed = true,
                     }
-                    chunks.push((c, data));
+                }
+                while !chunks_closed {
+                    match recv.try_recv() {
+                        Ok((c, data)) => {
+                            if is_host {
+                                let _ = tsx.send((c, data.clone()));
+                            }
+                            chunks.push((c, data));
+                        }
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => chunks_closed = true,
+                    }
                 }
                 if !mats.is_empty() {
                     for (c, data) in chunks.drain(..) {
                         let _ = send.send((c, create_image(data, &mats)));
                     }
+                }
+                // Drain final forwarding/renderable jobs before ending this
+                // lobby's worker. An empty channel is not shutdown: materials
+                // may still arrive after its chunk producer has closed.
+                if materials_closed && chunks_closed {
+                    break;
                 }
                 thread::sleep(Duration::from_millis(16));
             }
@@ -272,6 +298,8 @@ impl WorldManager {
                     inbound_model: Default::default(),
                     outbound_model: Default::default(),
                     authority_map: Default::default(),
+                    pending_local_transfers: Default::default(),
+                    terrain: Default::default(),
                     chunk_storage,
                     chunk_state: Default::default(),
                     emitted_messages: Default::default(),
@@ -304,6 +332,8 @@ impl WorldManager {
                     inbound_model: Default::default(),
                     outbound_model: Default::default(),
                     authority_map: Default::default(),
+                    pending_local_transfers: Default::default(),
+                    terrain: Default::default(),
                     chunk_storage,
                     chunk_state: Default::default(),
                     emitted_messages: Default::default(),
@@ -343,13 +373,20 @@ impl WorldManager {
             .copied()
             .collect::<Vec<_>>();
         self.current_update += 1;
-        let chunks_to_send: Vec<Vec<(OmniPeerId, u8)>> = updated_chunks
+        let chunks_to_send: Vec<_> = updated_chunks
             .iter()
             .map(|chunk| self.chunk_updated_locally(*chunk, priority, pos))
             .collect();
         let mut chunk_packet: HashMap<OmniPeerId, Vec<(ChunkDelta, u8)>> = HashMap::new();
-        for (chunk, who_sending) in updated_chunks.iter().zip(chunks_to_send.iter()) {
-            let Some(delta) = self.outbound_model.get_chunk_delta(*chunk, false) else {
+        for (chunk, (who_sending, cached_delta)) in updated_chunks.iter().zip(chunks_to_send.iter())
+        {
+            if who_sending.is_empty() {
+                continue;
+            }
+            let Some(delta) = cached_delta
+                .clone()
+                .or_else(|| self.outbound_model.get_chunk_delta(*chunk, false))
+            else {
                 continue;
             };
             for (peer, pri) in who_sending {
@@ -377,7 +414,7 @@ impl WorldManager {
         chunk: ChunkCoord,
         priority: u8,
         pos: &[i32],
-    ) -> Vec<(OmniPeerId, u8)> {
+    ) -> (Vec<(OmniPeerId, u8)>, Option<ChunkDelta>) {
         if pos.len() == 6 {
             self.my_pos = (pos[0], pos[1]);
             self.cam_pos = (pos[2], pos[3]);
@@ -400,6 +437,9 @@ impl WorldManager {
         let mut emit_queue = Vec::new();
         self.chunk_last_update.insert(chunk, self.current_update);
         let mut chunks_to_send = Vec::new();
+        // Construct only when an actual recipient needs it, and share the
+        // same RLE data between inline takeover and batched listener messages.
+        let mut cached_delta = None;
         match entry {
             ChunkState::Listening {
                 authority,
@@ -449,9 +489,6 @@ impl WorldManager {
                 new_authority,
                 stop_sending,
             } => {
-                let Some(delta) = self.outbound_model.get_chunk_delta(chunk, false) else {
-                    return Vec::new();
-                };
                 if *pri != priority {
                     *pri = priority;
                     emit_queue.push((
@@ -480,6 +517,10 @@ impl WorldManager {
                         // calls reset_change_tracking() right after and those
                         // pixels would never be sent again.
                         if new_auth == Some(listener) {
+                            let Some(delta) = self.outbound_model.get_chunk_delta(chunk, false)
+                            else {
+                                continue;
+                            };
                             new_auth_got = true;
                             emit_queue.push((
                                 Destination::Peer(listener),
@@ -489,6 +530,7 @@ impl WorldManager {
                                     take_auth: true,
                                 },
                             ));
+                            cached_delta = Some(delta);
                         } else {
                             chunks_to_send.push((listener, priority));
                         }
@@ -503,7 +545,7 @@ impl WorldManager {
         for (dst, msg) in emit_queue {
             self.emit_msg(dst, msg)
         }
-        chunks_to_send
+        (chunks_to_send, cached_delta)
     }
 
     pub(crate) fn update(&mut self) {
@@ -526,6 +568,7 @@ impl WorldManager {
             }
         }
         let mut emit_queue = Vec::new();
+        let mut local_authority_unloads = Vec::new();
         for (&chunk, state) in self.chunk_state.iter_mut() {
             let chunk_last_update = self
                 .chunk_last_update
@@ -583,15 +626,6 @@ impl WorldManager {
                         chunk.1,
                         self.is_notplayer,
                     ) {
-                        if let Some(new) = new_authority {
-                            emit_queue.push((
-                                Destination::Peer(new.0),
-                                WorldNetMessage::AskForAuthority {
-                                    chunk,
-                                    priority: new.1,
-                                },
-                            ));
-                        }
                         debug!(
                             "Unloading [authority] chunk {chunk:?} (updates: {chunk_last_update} {})",
                             self.current_update
@@ -604,7 +638,27 @@ impl WorldManager {
                                 world_num: self.world_num,
                             },
                         ));
-                        *state = ChunkState::UnloadPending;
+                        // Publish the terminal snapshot before asking another
+                        // peer to take over. In a two-player run these reach
+                        // the same host in this order; asking first reserves
+                        // authority before the host can store this snapshot.
+                        if let Some(new) = new_authority {
+                            emit_queue.push((
+                                Destination::Peer(new.0),
+                                WorldNetMessage::AskForAuthority {
+                                    chunk,
+                                    priority: new.1,
+                                },
+                            ));
+                        }
+                        if self.is_host {
+                            // Keep the local Authority proof until its queued
+                            // self-release is handled. Host arbitration may
+                            // already reserve this chunk for the successor.
+                            local_authority_unloads.push(chunk);
+                        } else {
+                            *state = ChunkState::UnloadPending;
+                        }
                     }
                 }
                 ChunkState::WantToGetAuth { .. } => {
@@ -620,17 +674,22 @@ impl WorldManager {
                     }
                 }
                 ChunkState::UnloadPending => {}
-                ChunkState::Transfer => {}
+                ChunkState::Transfer { .. } => {}
             }
         }
 
         for (dst, msg) in emit_queue {
             self.emit_msg(dst, msg)
         }
+        for chunk in local_authority_unloads {
+            // Also clean up a host authority that had no snapshot to release.
+            self.chunk_state.insert(chunk, ChunkState::UnloadPending);
+        }
         self.chunk_state.retain(|chunk, state| {
             let retain = *state != ChunkState::UnloadPending;
             if !retain {
                 // Models are basically caches, no need to keep the chunk around in them.
+                if !self.terrain.retire(*chunk) { return true; }
                 self.inbound_model.forget_chunk(*chunk);
                 self.outbound_model.forget_chunk(*chunk);
             }
@@ -651,10 +710,12 @@ impl WorldManager {
     }
 
     pub(crate) fn reset(&mut self) {
+        self.terrain.world_reset();
         self.inbound_model.reset();
         self.outbound_model.reset();
         self.chunk_storage.clear();
         self.authority_map.clear();
+        self.pending_local_transfers.clear();
         self.chunk_last_update.clear();
         self.chunk_state.clear();
         self.is_storage_recent.clear();
@@ -706,6 +767,7 @@ impl WorldManager {
         } else {
             None
         };
+        self.pending_local_transfers.remove(&chunk);
         self.authority_map.insert(chunk, (source, priority));
         self.emit_msg(
             Destination::Peer(source),
@@ -724,6 +786,10 @@ impl WorldManager {
         priority: u8,
         current_authority: OmniPeerId,
     ) {
+        self.pending_local_transfers.remove(&chunk);
+        if current_authority == self.my_peer_id {
+            self.pending_local_transfers.insert(chunk, source);
+        }
         self.authority_map.insert(chunk, (source, priority));
         self.emit_msg(
             Destination::Peer(source),
@@ -780,6 +846,9 @@ impl WorldManager {
                 },
             ),
             WorldNetMessage::AskForAuthority { chunk, priority } => {
+                self.last_request_priority.insert(chunk, priority);
+                self.chunk_state
+                    .insert(chunk, ChunkState::WaitingForAuthority);
                 self.emit_msg(
                     Destination::Host,
                     WorldNetMessage::RequestAuthority {
@@ -788,8 +857,6 @@ impl WorldManager {
                         can_wait: false,
                     },
                 );
-                self.chunk_state
-                    .insert(chunk, ChunkState::WaitingForAuthority);
             }
             WorldNetMessage::LoseAuthority {
                 chunk,
@@ -869,6 +936,12 @@ impl WorldManager {
                 if world_num != self.world_num {
                     return;
                 }
+                // Our own completion storage is dispatched synchronously
+                // after RequestAuthorityTransfer retires local Authority.
+                // A remote storage packet is not a transfer-completion proof.
+                if source == self.my_peer_id && priority.is_none() {
+                    self.pending_local_transfers.remove(&chunk);
+                }
                 if let Some(chunk_data) = chunk_data {
                     let _ = self.tx.send((chunk, chunk_data.clone()));
                     self.chunk_storage.insert(chunk, chunk_data);
@@ -892,8 +965,34 @@ impl WorldManager {
                 if world_num != self.world_num {
                     return;
                 }
+                // A previously sent take_auth delta can reserve this host as
+                // successor before the old owner unloads. Its final release
+                // is still valid while that exact source is being awaited.
+                // Do not admit an obsolete owner after the transfer finishes,
+                // nor infer a third party's transfer state from the host map.
+                let pending_self_transfer = chunk_data.is_some()
+                    && self.authority_map.get(&chunk).map(|s| s.0) == Some(self.my_peer_id)
+                    && self.chunk_state.get(&chunk)
+                        == Some(&ChunkState::Transfer { authority: source });
+                // The host's own terminal release is dispatched before its
+                // local Authority state is retired by update(). A completed
+                // RequestAuthorityTransfer has already retired that state.
+                let local_authority_release = source == self.my_peer_id
+                    && chunk_data.is_some()
+                    && self
+                        .pending_local_transfers
+                        .get(&chunk)
+                        .is_some_and(|successor| {
+                            self.authority_map.get(&chunk).map(|state| state.0) == Some(*successor)
+                        })
+                    && matches!(
+                        self.chunk_state.get(&chunk),
+                        Some(ChunkState::Authority { .. })
+                    );
                 if let Some(state) = self.authority_map.get(&chunk)
                     && state.0 != source
+                    && !pending_self_transfer
+                    && !local_authority_release
                 {
                     debug!(
                         "{source} sent RelinquishAuthority for {chunk:?}, but isn't currently an authority"
@@ -901,6 +1000,7 @@ impl WorldManager {
                     return;
                 }
                 self.authority_map.remove(&chunk);
+                self.pending_local_transfers.remove(&chunk);
                 if let Some(chunk_data) = chunk_data {
                     let _ = self.tx.send((chunk, chunk_data.clone()));
                     self.chunk_storage.insert(chunk, chunk_data);
@@ -970,6 +1070,7 @@ impl WorldManager {
                 );
                 if let Some(chunk_data) = chunk_data {
                     self.inbound_model.apply_chunk_data(chunk, &chunk_data);
+                    if self.terrain.is_enabled() { self.outbound_model.mirror_chunk_data(chunk, &chunk_data); }
                 } else {
                     warn!(
                         "Initial listen response has None chunk_data. It's generally supposed to have some."
@@ -1002,14 +1103,20 @@ impl WorldManager {
                     }) => {
                         if priority > *my_priority {
                             if take_auth {
+                                // Keep the requested priority through the
+                                // handoff, including a failed/disconnected source.
+                                self.last_request_priority
+                                    .insert(delta.chunk_coord, *my_priority);
                                 let rq = WorldNetMessage::RequestAuthority {
                                     chunk: delta.chunk_coord,
                                     priority: *my_priority,
                                     can_wait: false,
                                 };
-                                self.emit_msg(Destination::Host, rq);
                                 self.chunk_state
                                     .insert(delta.chunk_coord, ChunkState::WaitingForAuthority);
+                                // Host loopback can complete the next state
+                                // transition synchronously inside emit_msg.
+                                self.emit_msg(Destination::Host, rq);
                             }
                         } else {
                             let cs = ChunkState::Listening {
@@ -1032,6 +1139,7 @@ impl WorldManager {
                     _ => return,
                 }
                 self.inbound_model.apply_chunk_delta(&delta);
+                if self.terrain.is_enabled() { self.outbound_model.mirror_chunk_delta(&delta); }
                 self.is_storage_recent.remove(&delta.chunk_coord);
             }
             WorldNetMessage::ChunkPacket { chunkpacket } => {
@@ -1056,6 +1164,7 @@ impl WorldManager {
                         _ => continue,
                     }
                     self.inbound_model.apply_chunk_delta(&delta);
+                if self.terrain.is_enabled() { self.outbound_model.mirror_chunk_delta(&delta); }
                     self.is_storage_recent.remove(&delta.chunk_coord);
                 }
             }
@@ -1068,7 +1177,12 @@ impl WorldManager {
             } => {
                 if self.chunk_state.get(&chunk) != Some(&ChunkState::UnloadPending) {
                     debug!("Will request authority transfer");
-                    self.chunk_state.insert(chunk, ChunkState::Transfer);
+                    self.chunk_state.insert(
+                        chunk,
+                        ChunkState::Transfer {
+                            authority: current_authority,
+                        },
+                    );
                     self.emit_msg(
                         Destination::Peer(current_authority),
                         WorldNetMessage::RequestAuthorityTransfer { chunk },
@@ -1120,6 +1234,10 @@ impl WorldManager {
                 chunk_data,
                 listeners,
             } => {
+                if self.chunk_state.get(&chunk) != Some(&ChunkState::Transfer { authority: source })
+                {
+                    return;
+                }
                 debug!("Transfer ok");
                 if let Some(chunk_data) = chunk_data {
                     self.inbound_model.apply_chunk_data(chunk, &chunk_data);
@@ -1142,6 +1260,10 @@ impl WorldManager {
                 );
             }
             WorldNetMessage::TransferFailed { chunk } => {
+                if self.chunk_state.get(&chunk) != Some(&ChunkState::Transfer { authority: source })
+                {
+                    return;
+                }
                 debug!("Transfer failed, requesting authority normally");
                 let priority = self
                     .last_request_priority
@@ -1200,7 +1322,18 @@ impl WorldManager {
                     listeners.retain(|p| p != &source);
                 }
                 ChunkState::UnloadPending => {}
-                ChunkState::Transfer => {}
+                ChunkState::Transfer { authority } => {
+                    if *authority == source {
+                        // The host reserves the requester as authority before
+                        // the old owner answers. Re-request that reservation
+                        // normally, retaining the cached local samples for
+                        // the usual same-owner regrant without a snapshot.
+                        *chunk = ChunkState::RequestAuthority {
+                            priority: self.last_request_priority.get(c).copied().unwrap_or(255),
+                            can_wait: true,
+                        };
+                    }
+                }
                 ChunkState::WantToGetAuth { authority, .. } => {
                     if authority == &source {
                         to_remove.push(*c)
@@ -1209,10 +1342,23 @@ impl WorldManager {
             }
         }
         for c in to_remove {
-            self.chunk_state.remove(&c);
+            if self.terrain.is_enabled() {
+                let priority = match self.chunk_state.get(&c) {
+                    Some(ChunkState::Listening {priority,..}) => *priority,
+                    Some(ChunkState::WantToGetAuth {my_priority,..}) => *my_priority,
+                    _ => self.last_request_priority.get(&c).copied().unwrap_or(255),
+                };
+                self.chunk_state.insert(c, ChunkState::RequestAuthority {priority,can_wait:true});
+            } else { self.chunk_state.remove(&c); }
         }
         if !self.is_host {
             return;
+        }
+        if source == self.my_peer_id {
+            self.pending_local_transfers.clear();
+        } else {
+            self.pending_local_transfers
+                .retain(|_, successor| *successor != source);
         }
         let mut pending_messages = Vec::new();
 
@@ -2366,6 +2512,9 @@ impl WorldManager {
         }
     }
 }
+
+#[cfg(test)]
+mod map_worker_resource_tests;
 fn create_image(chunk: ChunkData, materials: &FxHashMap<u16, u32>) -> RgbaImage {
     let mut working_chunk = Chunk::default();
     chunk.apply_to_chunk(&mut working_chunk);
@@ -2508,6 +2657,770 @@ fn compute_atans(
 fn get_ray(r: u64) -> u64 {
     let c = r.saturating_mul(15708) / 10000; // tau/4
     (c - c % 8).clamp(1 << 4, 1 << 11)
+}
+
+#[cfg(test)]
+#[path = "world/authority_lifecycle_tests.rs"]
+mod authority_lifecycle_tests;
+
+#[cfg(test)]
+pub(super) mod authority_transfer_tests {
+    use super::*;
+    use world_model::encoding::{Header, PixelRun, RawPixel};
+
+    const ME: OmniPeerId = OmniPeerId(1);
+    const OLD: OmniPeerId = OmniPeerId(2);
+    const OTHER: OmniPeerId = OmniPeerId(3);
+    const CHUNK: ChunkCoord = ChunkCoord(0, 0);
+
+    // Avoid WorldManager::new's unrelated map-rendering background thread.
+    pub(crate) fn world() -> WorldManager {
+        static NEXT_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/core-audit-world-tests");
+        std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let path = root.join(format!(
+            "authority-transfer-{}-{}",
+            std::process::id(),
+            NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        assert_eq!(path.parent(), Some(root.as_path()));
+        let (tx, _) = mpsc::channel();
+        WorldManager {
+            nice_terraforming: true,
+            is_host: true,
+            my_pos: (0, 0),
+            cam_pos: (0, 0),
+            is_notplayer: false,
+            my_peer_id: ME,
+            save_state: SaveState::new(path),
+            inbound_model: Default::default(),
+            outbound_model: Default::default(),
+            chunk_storage: Default::default(),
+            authority_map: Default::default(),
+            pending_local_transfers: Default::default(),
+                    terrain: Default::default(),
+            chunk_state: Default::default(),
+            emitted_messages: Default::default(),
+            current_update: 0,
+            chunk_last_update: Default::default(),
+            last_request_priority: Default::default(),
+            world_num: 0,
+            materials: Default::default(),
+            is_storage_recent: Default::default(),
+            explosion_pointer: Default::default(),
+            explosion_data: Default::default(),
+            explosion_heap: Default::default(),
+            tx,
+        }
+    }
+
+    fn delta(material: u16) -> ChunkDelta {
+        let mut model = WorldModel::default();
+        model.apply_chunk_data(CHUNK, &ChunkData::new(material));
+        model.get_chunk_delta(CHUNK, true).unwrap()
+    }
+
+    fn outbound_material(world: &WorldManager) -> u16 {
+        let data = world.outbound_model.get_chunk_data(CHUNK).unwrap();
+        let mut chunk = Chunk::default();
+        data.apply_to_chunk(&mut chunk);
+        chunk.pixel(0).material
+    }
+
+    fn begin_transfer() -> WorldManager {
+        let mut world = world();
+        world
+            .outbound_model
+            .apply_chunk_data(CHUNK, &ChunkData::new(7));
+        world.chunk_storage.insert(CHUNK, ChunkData::new(4));
+        world.authority_map.insert(CHUNK, (OLD, 8));
+        world.chunk_state.insert(
+            CHUNK,
+            ChunkState::WantToGetAuth {
+                authority: OLD,
+                auth_priority: 8,
+                my_priority: 1,
+            },
+        );
+        // Real takeover path: the old authority's final update permits our
+        // request; the host reserves authority for us before transfer finishes.
+        world.handle_msg(
+            OLD,
+            WorldNetMessage::ListenUpdate {
+                delta: delta(5),
+                priority: 8,
+                take_auth: true,
+            },
+        );
+        assert_eq!(world.authority_map.get(&CHUNK), Some(&(ME, 1)));
+        assert!(world.get_emitted_msgs().iter().any(|m| {
+            m.dst == Destination::Peer(OLD)
+                && matches!(m.msg, WorldNetMessage::RequestAuthorityTransfer { chunk } if chunk == CHUNK)
+        }));
+        world
+    }
+
+    #[test]
+    fn source_disconnect_recovers_transfer_and_keeps_latest_local_pixels() {
+        let mut world = begin_transfer();
+        // Local simulation continues while the handshake is pending.
+        world.add_update(NoitaWorldUpdate {
+            header: Header {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 0,
+                run_count: 1,
+            },
+            runs: vec![PixelRun {
+                length: 1,
+                data: RawPixel {
+                    material: 9,
+                    flags: 0,
+                },
+            }],
+        });
+        world.handle_peer_left(OLD);
+        world.update();
+        assert_eq!(
+            world.chunk_state.get(&CHUNK),
+            Some(&ChunkState::authority(1))
+        );
+        assert_eq!(
+            outbound_material(&world),
+            9,
+            "recovery must not install stale stored terrain"
+        );
+        world.handle_msg(OLD, WorldNetMessage::ListenRequest { chunk: CHUNK });
+        assert!(world.get_emitted_msgs().iter().any(|m| {
+            m.dst == Destination::Peer(OLD)
+                && matches!(m.msg, WorldNetMessage::ListenInitialResponse { chunk, .. } if chunk == CHUNK)
+        }), "a returning peer can listen after recovery");
+    }
+
+    #[test]
+    fn normal_transfer_keeps_requested_priority_and_snapshot() {
+        let mut world = begin_transfer();
+        world.handle_msg(
+            OLD,
+            WorldNetMessage::TransferOk {
+                chunk: CHUNK,
+                chunk_data: Some(ChunkData::new(6)),
+                listeners: Default::default(),
+            },
+        );
+        assert_eq!(
+            world.chunk_state.get(&CHUNK),
+            Some(&ChunkState::authority(1))
+        );
+        assert_eq!(outbound_material(&world), 6);
+    }
+
+    #[test]
+    fn unrelated_disconnect_and_reply_cannot_resolve_transfer() {
+        let mut world = begin_transfer();
+        world.handle_peer_left(OTHER);
+        world.handle_msg(
+            OTHER,
+            WorldNetMessage::TransferOk {
+                chunk: CHUNK,
+                chunk_data: Some(ChunkData::new(6)),
+                listeners: Default::default(),
+            },
+        );
+        assert_eq!(outbound_material(&world), 7);
+        world.handle_msg(OTHER, WorldNetMessage::TransferFailed { chunk: CHUNK });
+        world.handle_msg(
+            OLD,
+            WorldNetMessage::TransferOk {
+                chunk: CHUNK,
+                chunk_data: Some(ChunkData::new(8)),
+                listeners: Default::default(),
+            },
+        );
+        assert_eq!(
+            world.chunk_state.get(&CHUNK),
+            Some(&ChunkState::authority(1))
+        );
+        assert_eq!(outbound_material(&world), 8);
+    }
+
+    #[test]
+    fn late_replies_cannot_replace_recovered_authority() {
+        let mut world = begin_transfer();
+        world.handle_peer_left(OLD);
+        world.update();
+        world.handle_msg(
+            OLD,
+            WorldNetMessage::TransferOk {
+                chunk: CHUNK,
+                chunk_data: Some(ChunkData::new(6)),
+                listeners: Default::default(),
+            },
+        );
+        world.handle_msg(OLD, WorldNetMessage::TransferFailed { chunk: CHUNK });
+        assert_eq!(
+            world.chunk_state.get(&CHUNK),
+            Some(&ChunkState::authority(1))
+        );
+        assert_eq!(outbound_material(&world), 7);
+    }
+
+    #[test]
+    fn active_transfer_failure_retries_when_host_has_no_snapshot() {
+        let mut world = begin_transfer();
+        world.chunk_storage.clear();
+        world.handle_msg(OLD, WorldNetMessage::TransferFailed { chunk: CHUNK });
+        world.update();
+        assert_eq!(
+            world.chunk_state.get(&CHUNK),
+            Some(&ChunkState::authority(1))
+        );
+        assert_eq!(outbound_material(&world), 7);
+    }
+
+    #[test]
+    fn recovered_transfer_can_unload_and_ignores_late_snapshot() {
+        let mut world = begin_transfer();
+        world.my_pos = (20, 20);
+        world.cam_pos = (20, 20);
+        world.handle_peer_left(OLD);
+        world.update();
+        world.update();
+        assert!(!world.chunk_state.contains_key(&CHUNK));
+        assert!(world.outbound_model.get_chunk_data(CHUNK).is_none());
+        assert!(world.inbound_model.get_chunk_data(CHUNK).is_none());
+        world.handle_msg(
+            OLD,
+            WorldNetMessage::TransferOk {
+                chunk: CHUNK,
+                chunk_data: Some(ChunkData::new(6)),
+                listeners: Default::default(),
+            },
+        );
+        assert!(!world.chunk_state.contains_key(&CHUNK));
+        assert!(world.outbound_model.get_chunk_data(CHUNK).is_none());
+    }
+    // Independent reviewer cases: real production message dispatch, no network
+    // reordering assumptions and no replacement world-state implementation.
+    #[test]
+    fn review_host_ask_keeps_synchronous_transfer_state() {
+        let mut world = world();
+        world
+            .outbound_model
+            .apply_chunk_data(CHUNK, &ChunkData::new(7));
+        world.authority_map.insert(CHUNK, (OLD, 8));
+        world.handle_msg(
+            OLD,
+            WorldNetMessage::AskForAuthority {
+                chunk: CHUNK,
+                priority: 1,
+            },
+        );
+        assert_eq!(
+            world.chunk_state.get(&CHUNK),
+            Some(&ChunkState::Transfer { authority: OLD }),
+            "AskForAuthority must not overwrite a synchronous host transition"
+        );
+        world.handle_msg(OLD, WorldNetMessage::TransferFailed { chunk: CHUNK });
+        world.update();
+        assert_eq!(
+            world.chunk_state.get(&CHUNK),
+            Some(&ChunkState::authority(1))
+        );
+        assert_eq!(outbound_material(&world), 7);
+    }
+
+    #[test]
+    fn review_host_ask_keeps_synchronous_immediate_grant() {
+        let mut world = world();
+        world
+            .outbound_model
+            .apply_chunk_data(CHUNK, &ChunkData::new(7));
+        world.handle_msg(
+            OLD,
+            WorldNetMessage::AskForAuthority {
+                chunk: CHUNK,
+                priority: 2,
+            },
+        );
+        assert_eq!(
+            world.chunk_state.get(&CHUNK),
+            Some(&ChunkState::authority(2)),
+            "an immediate self grant must survive AskForAuthority"
+        );
+    }
+
+    #[test]
+    fn review_nonhost_disconnect_regrant_preserves_outbound_cache() {
+        let mut host = world();
+        host.my_peer_id = OTHER;
+        host.authority_map.insert(CHUNK, (OLD, 8));
+        host.chunk_storage.insert(CHUNK, ChunkData::new(4));
+        let mut client = world();
+        client.is_host = false;
+        client
+            .outbound_model
+            .apply_chunk_data(CHUNK, &ChunkData::new(7));
+        client.chunk_state.insert(
+            CHUNK,
+            ChunkState::WantToGetAuth {
+                authority: OLD,
+                auth_priority: 8,
+                my_priority: 1,
+            },
+        );
+        client.handle_msg(
+            OLD,
+            WorldNetMessage::ListenUpdate {
+                delta: delta(5),
+                priority: 8,
+                take_auth: true,
+            },
+        );
+        let request = client
+            .get_emitted_msgs()
+            .into_iter()
+            .find(|m| m.dst == Destination::Host)
+            .unwrap();
+        host.handle_msg(ME, request.msg);
+        assert_eq!(host.authority_map.get(&CHUNK), Some(&(ME, 1)));
+        let transfer = host
+            .get_emitted_msgs()
+            .into_iter()
+            .find(|m| m.dst == Destination::Peer(ME))
+            .unwrap();
+        client.handle_msg(OTHER, transfer.msg);
+        assert_eq!(
+            client.chunk_state.get(&CHUNK),
+            Some(&ChunkState::Transfer { authority: OLD })
+        );
+        client.get_emitted_msgs();
+        host.handle_peer_left(OLD);
+        client.handle_peer_left(OLD);
+        client.update();
+        let request = client
+            .get_emitted_msgs()
+            .into_iter()
+            .find(|m| m.dst == Destination::Host)
+            .unwrap();
+        host.handle_msg(ME, request.msg);
+        let grant = host
+            .get_emitted_msgs()
+            .into_iter()
+            .find(|m| m.dst == Destination::Peer(ME))
+            .unwrap();
+        assert!(matches!(
+            &grant.msg,
+            WorldNetMessage::GotAuthority {
+                chunk_data: None,
+                ..
+            }
+        ));
+        client.handle_msg(OTHER, grant.msg);
+        assert_eq!(
+            client.chunk_state.get(&CHUNK),
+            Some(&ChunkState::authority(1))
+        );
+        assert_eq!(outbound_material(&client), 7);
+    }
+
+    #[test]
+    fn review_old_source_reply_cannot_complete_new_transfer() {
+        let mut world = begin_transfer();
+        world.handle_msg(
+            ME,
+            WorldNetMessage::GetAuthorityFrom {
+                chunk: CHUNK,
+                current_authority: OTHER,
+            },
+        );
+        world.handle_msg(
+            OLD,
+            WorldNetMessage::TransferOk {
+                chunk: CHUNK,
+                chunk_data: Some(ChunkData::new(6)),
+                listeners: Default::default(),
+            },
+        );
+        world.handle_msg(OLD, WorldNetMessage::TransferFailed { chunk: CHUNK });
+        assert_eq!(
+            world.chunk_state.get(&CHUNK),
+            Some(&ChunkState::Transfer { authority: OTHER })
+        );
+        assert_eq!(outbound_material(&world), 7);
+        world.handle_msg(
+            OTHER,
+            WorldNetMessage::TransferOk {
+                chunk: CHUNK,
+                chunk_data: Some(ChunkData::new(8)),
+                listeners: Default::default(),
+            },
+        );
+        assert_eq!(
+            world.chunk_state.get(&CHUNK),
+            Some(&ChunkState::authority(1))
+        );
+        assert_eq!(outbound_material(&world), 8);
+        world.handle_msg(
+            OTHER,
+            WorldNetMessage::TransferOk {
+                chunk: CHUNK,
+                chunk_data: Some(ChunkData::new(9)),
+                listeners: Default::default(),
+            },
+        );
+        assert_eq!(
+            outbound_material(&world),
+            8,
+            "completed transfer cannot be overwritten by duplicate"
+        );
+    }
+
+    #[test]
+    fn review_lazy_delta_keeps_priority_and_cancels_outdated_handoff() {
+        let mut world = world();
+        world
+            .outbound_model
+            .apply_chunk_data(CHUNK, &ChunkData::new(7));
+        world.authority_map.insert(CHUNK, (ME, 1));
+        world.chunk_state.insert(
+            CHUNK,
+            ChunkState::Authority {
+                listeners: [OLD, OTHER].into_iter().collect(),
+                priority: 1,
+                new_authority: Some((OLD, 0)),
+                stop_sending: true,
+            },
+        );
+        world.add_end(0, &[0]);
+        assert_eq!(world.authority_map.get(&CHUNK), Some(&(ME, 0)));
+        assert!(matches!(
+            world.chunk_state.get(&CHUNK),
+            Some(ChunkState::Authority {
+                priority: 0,
+                new_authority: None,
+                stop_sending: false,
+                ..
+            })
+        ));
+        let messages = world.get_emitted_msgs();
+        assert_eq!(messages.len(), 2);
+        for message in messages {
+            assert!(
+                message.dst == Destination::Peer(OLD) || message.dst == Destination::Peer(OTHER)
+            );
+            let WorldNetMessage::ChunkPacket { chunkpacket } = message.msg else {
+                panic!("cancelled handoff must send ordinary packets");
+            };
+            assert_eq!(chunkpacket.len(), 1);
+            assert_eq!(chunkpacket[0].1, 0);
+        }
+    }
+
+    #[test]
+    fn review_lazy_inline_and_batch_snapshots_survive_reset_and_new_samples() {
+        let mut world = world();
+        world
+            .outbound_model
+            .apply_chunk_data(CHUNK, &ChunkData::new(7));
+        let expected =
+            bitcode::encode(&world.outbound_model.get_chunk_delta(CHUNK, false).unwrap());
+        world.chunk_state.insert(
+            CHUNK,
+            ChunkState::Authority {
+                listeners: [OLD, OTHER].into_iter().collect(),
+                priority: 1,
+                new_authority: Some((OLD, 0)),
+                stop_sending: false,
+            },
+        );
+        world.add_end(1, &[0]);
+        let mut snapshots = Vec::new();
+        for message in world.get_emitted_msgs() {
+            match message.msg {
+                WorldNetMessage::ListenUpdate {
+                    delta,
+                    take_auth: true,
+                    ..
+                } => {
+                    assert_eq!(message.dst, Destination::Peer(OLD));
+                    snapshots.push(delta);
+                }
+                WorldNetMessage::ChunkPacket { chunkpacket } => {
+                    assert_eq!(message.dst, Destination::Peer(OTHER));
+                    assert_eq!(chunkpacket.len(), 1);
+                    snapshots.push(chunkpacket[0].0.clone());
+                }
+                _ => panic!("unexpected routing during handoff"),
+            }
+        }
+        assert_eq!(snapshots.len(), 2);
+        assert!(world.outbound_model.updated_chunks().is_empty());
+        world
+            .outbound_model
+            .apply_chunk_data(CHUNK, &ChunkData::new(9));
+        world.outbound_model.reset_change_tracking();
+        for delta in snapshots {
+            assert_eq!(
+                bitcode::encode(&delta),
+                expected,
+                "owned immutable snapshot must survive later model changes"
+            );
+        }
+    }
+
+    #[test]
+    fn review_lazy_world_number_reset_cannot_send_old_world_pixels() {
+        let mut world = world();
+        for chunk in [CHUNK, ChunkCoord(1, 0)] {
+            world
+                .outbound_model
+                .apply_chunk_data(chunk, &ChunkData::new(7));
+            world.chunk_state.insert(
+                chunk,
+                ChunkState::Authority {
+                    listeners: [OLD].into_iter().collect(),
+                    priority: 1,
+                    new_authority: None,
+                    stop_sending: false,
+                },
+            );
+        }
+        world.add_end(2, &[1]);
+        assert_eq!(world.world_num, 1);
+        assert!(world.get_emitted_msgs().is_empty());
+        for chunk in [CHUNK, ChunkCoord(1, 0)] {
+            assert!(world.outbound_model.get_chunk_data(chunk).is_none());
+            assert_eq!(
+                world.chunk_state.get(&chunk),
+                Some(&ChunkState::RequestAuthority {
+                    priority: 2,
+                    can_wait: true
+                })
+            );
+        }
+    }
+
+    /// Reproducible add_end benchmark and complete encoded-message trace.
+    /// Run explicitly with EW_TERRAIN_BENCH_DIR pointing at an isolated evidence
+    /// directory. Applying samples, encoding the trace and delivering it are
+    /// outside the timed region; only the real production add_end is measured.
+    #[test]
+    #[ignore = "explicit terrain benchmark; writes comparison traces"]
+    fn benchmark_add_end_and_trace_delivery() {
+        use std::time::Instant;
+        let output = std::path::PathBuf::from(
+            std::env::var_os("EW_TERRAIN_BENCH_DIR").expect("set EW_TERRAIN_BENCH_DIR"),
+        );
+        std::fs::create_dir_all(&output).unwrap();
+        let frames = 144usize;
+        // name, chunks, listeners, change period (0=idle), fragmented,
+        // retained unloaded-history entries, delivery batch size, handoff offer.
+        let cases = [
+            ("idle", 2, 1, 0, false, 0, 1, false),
+            ("ordinary_no_listeners", 1, 0, 1, false, 0, 1, false),
+            ("ordinary_one_listener", 1, 1, 1, false, 0, 1, false),
+            ("ordinary_two_chunks", 2, 1, 1, false, 0, 1, false),
+            ("ordinary_three_listeners", 2, 3, 1, false, 0, 1, false),
+            ("burst_32_chunks", 32, 3, 8, false, 0, 1, false),
+            ("sustained_32_chunks", 32, 3, 1, false, 0, 1, false),
+            ("fragmented_4_chunks", 4, 3, 1, true, 0, 1, false),
+            ("history_65536", 2, 1, 1, false, 65536, 1, false),
+            ("delivery_stall_16", 2, 3, 1, false, 0, 16, false),
+            ("handoff_offers", 2, 3, 1, false, 0, 1, true),
+        ];
+        println!(
+            "case,frames,chunks,listeners,median_us,p95_us,max_us,messages,world_payload_bytes,peak_queue_messages,peak_queue_payload_bytes,retained_chunks,history_entries"
+        );
+        for (name, chunks, listeners, period, fragmented, history, batch, handoff) in cases {
+            let mut sender = world();
+            let ids: Vec<_> = (0..listeners).map(|i| OmniPeerId(10 + i)).collect();
+            let mut receivers: Vec<_> = ids
+                .iter()
+                .map(|id| {
+                    let mut receiver = world();
+                    receiver.is_host = false;
+                    receiver.my_peer_id = *id;
+                    receiver
+                })
+                .collect();
+            for i in 0..chunks {
+                let chunk = ChunkCoord(i as i32, 0);
+                sender
+                    .outbound_model
+                    .apply_chunk_data(chunk, &ChunkData::new(1));
+                sender.chunk_state.insert(
+                    chunk,
+                    ChunkState::Authority {
+                        listeners: ids.iter().copied().collect(),
+                        priority: 1,
+                        new_authority: None,
+                        stop_sending: false,
+                    },
+                );
+                for receiver in &mut receivers {
+                    receiver
+                        .inbound_model
+                        .apply_chunk_data(chunk, &ChunkData::new(1));
+                    receiver.chunk_state.insert(
+                        chunk,
+                        ChunkState::Listening {
+                            authority: ME,
+                            priority: 1,
+                        },
+                    );
+                }
+            }
+            sender.outbound_model.reset_change_tracking();
+            for i in 0..history {
+                sender.chunk_last_update.insert(ChunkCoord(10000 + i, 0), 0);
+            }
+            let mut times = Vec::new();
+            let mut trace = Vec::new();
+            let mut pending = Vec::new();
+            let mut pending_bytes = 0usize;
+            let (mut messages, mut wire_bytes, mut peak_messages, mut peak_bytes) = (0, 0, 0, 0);
+            for frame in 0..frames {
+                if period != 0 && frame % period == 0 {
+                    for i in 0..chunks {
+                        let chunk = ChunkCoord(i as i32, 0);
+                        let offset = (frame * 17) % (CHUNK_SIZE * CHUNK_SIZE);
+                        let (x, y, w, h, runs) = if fragmented {
+                            let runs = (0..CHUNK_SIZE * CHUNK_SIZE)
+                                .map(|p| PixelRun {
+                                    length: 1,
+                                    data: RawPixel {
+                                        material: 2 + ((p + frame) % 2) as u16,
+                                        flags: 0,
+                                    },
+                                })
+                                .collect();
+                            (chunk.0 * CHUNK_SIZE as i32, 0, 127, 127, runs)
+                        } else {
+                            (
+                                chunk.0 * CHUNK_SIZE as i32 + (offset % CHUNK_SIZE) as i32,
+                                (offset / CHUNK_SIZE) as i32,
+                                0,
+                                0,
+                                vec![PixelRun {
+                                    length: 1,
+                                    data: RawPixel {
+                                        material: 2 + (frame % 2) as u16,
+                                        flags: 0,
+                                    },
+                                }],
+                            )
+                        };
+                        sender.add_update(NoitaWorldUpdate {
+                            header: Header {
+                                x,
+                                y,
+                                w,
+                                h,
+                                run_count: runs.len() as u16,
+                            },
+                            runs,
+                        });
+                        if handoff {
+                            // Independent offers exercise the inline-takeover
+                            // branch; completing the protocol is covered above.
+                            sender.chunk_state.insert(
+                                chunk,
+                                ChunkState::Authority {
+                                    listeners: ids.iter().copied().collect(),
+                                    priority: 1,
+                                    new_authority: Some((ids[0], 0)),
+                                    stop_sending: false,
+                                },
+                            );
+                            receivers[0].chunk_state.insert(
+                                chunk,
+                                ChunkState::WantToGetAuth {
+                                    authority: ME,
+                                    auth_priority: 1,
+                                    my_priority: 0,
+                                },
+                            );
+                        }
+                    }
+                }
+                let start = Instant::now();
+                sender.add_end(1, &[0]);
+                times.push(start.elapsed().as_secs_f64() * 1e6);
+                let mut encoded = Vec::new();
+                for message in sender.get_emitted_msgs() {
+                    assert!(matches!(
+                        message.reliability,
+                        tangled::Reliability::Reliable
+                    ));
+                    let Destination::Peer(peer) = message.dst else {
+                        panic!("unexpected destination")
+                    };
+                    let mut bytes = peer.0.to_le_bytes().to_vec();
+                    bytes.extend(bitcode::encode(&message.msg));
+                    messages += 1;
+                    wire_bytes += bytes.len() - 8;
+                    pending_bytes += bytes.len() - 8;
+                    encoded.push(bytes);
+                    pending.push((peer, message.msg));
+                }
+                // HashMap peer iteration order is immaterial to per-peer wire
+                // order; normalize only independent peer destinations per frame.
+                encoded.sort_by_key(|bytes| u64::from_le_bytes(bytes[..8].try_into().unwrap()));
+                trace.extend((encoded.len() as u64).to_le_bytes());
+                for bytes in encoded {
+                    trace.extend((bytes.len() as u64).to_le_bytes());
+                    trace.extend(bytes);
+                }
+                peak_messages = peak_messages.max(pending.len());
+                peak_bytes = peak_bytes.max(pending_bytes);
+                if (frame + 1) % batch == 0 || frame + 1 == frames {
+                    for (peer, message) in pending.drain(..) {
+                        let receiver =
+                            &mut receivers[ids.iter().position(|id| *id == peer).unwrap()];
+                        receiver.handle_msg(ME, message);
+                        receiver.get_emitted_msgs(); // Offers can request authority.
+                    }
+                    pending_bytes = 0;
+                }
+                for receiver in &mut receivers {
+                    // Exercise production inbound serialization and clearing.
+                    for bytes in receiver.get_noita_updates() {
+                        trace.extend((bytes.len() as u64).to_le_bytes());
+                        trace.extend(bytes);
+                    }
+                    trace.extend(0u64.to_le_bytes());
+                }
+            }
+            assert!(pending.is_empty());
+            for i in 0..chunks {
+                let chunk = ChunkCoord(i as i32, 0);
+                let expected =
+                    bitcode::encode(&sender.outbound_model.get_chunk_data(chunk).unwrap());
+                trace.extend((expected.len() as u64).to_le_bytes());
+                trace.extend(&expected);
+                for receiver in &receivers {
+                    assert_eq!(
+                        bitcode::encode(&receiver.inbound_model.get_chunk_data(chunk).unwrap()),
+                        expected,
+                        "{name}: delivered receiver must equal sender for chunk{i}"
+                    );
+                }
+            }
+            times.sort_by(f64::total_cmp);
+            println!(
+                "{name},{frames},{chunks},{listeners},{:.3},{:.3},{:.3},{messages},{wire_bytes},{peak_messages},{peak_bytes},{chunks},{}",
+                times[frames / 2],
+                times[(frames * 95 / 100).min(frames - 1)],
+                times[frames - 1],
+                sender.chunk_last_update.len()
+            );
+            std::fs::write(output.join(format!("{name}.trace.bin")), trace).unwrap();
+        }
+    }
 }
 /*#[cfg(test)]
 #[test]

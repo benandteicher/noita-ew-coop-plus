@@ -38,6 +38,9 @@ pub(crate) enum NetMsg {
     AudioData(Vec<Vec<u8>>, bool, i32, i32, f32),
     MapData(FxHashMap<ChunkCoord, ChunkData>),
     MatData(FxHashMap<u16, u32>),
+    /// Authoritative host rules/launch permission; unlike StartGame this does
+    /// not reset terrain, entities, flags, income or revival state.
+    SessionRules(crate::bookkeeping::run_settings::RuleAdvertisement),
 }
 
 impl From<MessageRequest<WorldNetMessage>> for MessageRequest<NetMsg> {

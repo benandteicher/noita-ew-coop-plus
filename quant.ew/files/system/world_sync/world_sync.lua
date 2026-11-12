@@ -9,19 +9,29 @@ local ffi = require("ffi")
 local encoded_area = world.EncodedArea()
 
 local world_sync = {}
+local feedback_module = dofile_once("mods/quant.ew/files/system/world_sync/terrain_feedback.lua")
+local feedback = feedback_module.new({
+    world = function() return tonumber(ctx.proxy_opt.world_num) end,
+    send = function(key, data) net.proxy_bin_send(key, data) end,
+    apply = function(data, cx, cy)
+        assert(type(ewext.apply_terrain) == "function", "Matching ewext terrain protocol v2 required")
+        assert(#data >= ffi.sizeof(world.EncodedAreaHeader), "Truncated terrain application")
+        local header = ffi.cast("struct EncodedAreaHeader const*", ffi.cast("const char*", data))
+        assert(tonumber(header.x) == cx * 128 and tonumber(header.y) == cy * 128,
+            "Terrain command chunk does not match its application data")
+        local ptr = tonumber(ffi.cast("intptr_t", ffi.cast("const char*", data)))
+        return ewext.apply_terrain(ptr, #data)
+    end,
+    report = function(err) GamePrintImportant("Terrain sync stopped", tostring(err)); print("Terrain sync stopped: " .. tostring(err)) end,
+})
+net.terrain_begin = function() feedback:begin() end
 
 -- The inbound decode used to be a per-pixel Lua/FFI loop (world.decode), which
 -- is the most expensive thing on the receive path. The native implementation
 -- calls the same NoitaPatcher-resolved game functions.
 --
--- On by default. The setting is the way to turn it back off without shipping a
--- new build; it is read once here, so a change applies on the next game start.
--- It replaced quant.ew.rust_world_decode, which defaulted to off - a new id so
--- that value, saved by anyone who ever loaded that build, is not carried over.
-local use_rust_decode = ModSettingGet("quant.ew.native_world_decode")
-if use_rust_decode == nil then
-    use_rust_decode = true
-end
+-- Protocol v2 requires verified native application. The legacy decode toggle
+-- remains meaningful only to direct diagnostic calls to handle_world_data.
 local rust_decode_ready = false
 
 -- Number of native decode failures tolerated before giving up on it for the
@@ -71,11 +81,10 @@ function world_sync.on_world_initialized()
     print("Last material id: " .. c)
     world.last_material_id = c
 
-    -- Hand the world functions NoitaPatcher resolved to ewext, so the inbound
-    -- decode can run natively. If anything here fails we simply keep using the
-    -- Lua decode below.
-    if use_rust_decode then
+    -- Verified application has no legacy fallback: failure closes capture.
+    do
         local ok, err = pcall(function()
+            assert(type(ewext.apply_terrain) == "function", "Matching ewext terrain protocol v2 required")
             ewext.init_world_decode(
                 tonumber(ffi.cast("intptr_t", world_ffi.get_cell)),
                 tonumber(ffi.cast("intptr_t", world_ffi.chunk_loaded)),
@@ -89,11 +98,11 @@ function world_sync.on_world_initialized()
             print("World decode: native")
         else
             rust_decode_ready = false
-            print("World decode: falling back to Lua (" .. tostring(err) .. ")")
+            feedback:stop(err)
+            return
         end
-    else
-        print("World decode: Lua (disabled by setting)")
     end
+    feedback:begin()
     -- do_benchmark()
 end
 
@@ -101,6 +110,11 @@ local function send_chunks(cx, cy)
     local chx, chy = cx * CHUNK_SIZE, cy * CHUNK_SIZE
     local crect = rect.Rectangle(chx, chy, chx + CHUNK_SIZE, chy + CHUNK_SIZE)
     if DoesWorldExistAt(crect.left, crect.top, crect.right, crect.bottom) then
+        local grid_world = world_ffi.get_grid_world()
+        local chunk_map = grid_world.vtable.get_chunk_map(grid_world)
+        if not world_ffi.chunk_loaded(chunk_map, chx, chy)
+            or not world_ffi.chunk_loaded(chunk_map, chx + CHUNK_SIZE - 1, chy + CHUNK_SIZE - 1) then return end
+        if not feedback:before_capture(cx, cy) then return end
         local area = world.encode_area(crect.left, crect.top, crect.right, crect.bottom, encoded_area)
         if area ~= nil then
             --if ctx.proxy_opt.debug then
@@ -302,7 +316,9 @@ function world_sync.native_decode_stats()
 end
 
 net.net_handling.proxy[0] = function(_, value)
-    world_sync.handle_world_data(value)
+    -- Old proxies cannot provide an application fence.
+    feedback:stop("Incompatible legacy terrain packet; matching proxy/ewext/Lua required")
 end
+net.net_handling.proxy[2] = function(_, value) feedback:handle(value) end
 
 return world_sync

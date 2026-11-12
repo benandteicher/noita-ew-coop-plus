@@ -33,6 +33,7 @@ pub enum ConnectError {
     VersionMismatch { remote_version: Version },
     VersionMissing,
     LobbyDoesNotExist,
+    LobbyCreateFailed(SteamError),
 }
 
 impl Display for ConnectError {
@@ -48,7 +49,7 @@ impl Display for ConnectError {
                         ),
                         (
                             "current_version".to_string(),
-                            FluentValue::from(Version::current().to_string()),
+                            FluentValue::from(crate::frozen_runtime::peer_version().to_string()),
                         ),
                     ],
                 );
@@ -56,6 +57,7 @@ impl Display for ConnectError {
             }
             ConnectError::VersionMissing => write!(f, "{}", tr("error_missing_version_field")),
             ConnectError::LobbyDoesNotExist => write!(f, "{}", tr("error_lobby_does_not_exist")),
+            ConnectError::LobbyCreateFailed(error)=>write!(f,"Steam could not create the lobby: {error}. Your settings and saved run were retained. Check Steam connectivity and retry; no proxy restart or reset is required."),
         }
     }
 }
@@ -215,14 +217,14 @@ struct Connections {
 }
 
 impl Connections {
-    fn new(client: &steamworks::Client) -> Self {
+    fn new(client: &steamworks::Client) -> Result<Self,String> {
         let my_id = client.user().steam_id();
         let networking_sockets = client.networking_sockets();
         let listen_socket = networking_sockets
             .create_listen_socket_p2p(0, None)
-            .expect("handle to be valid"); // Unclear in what cases this can fail.
+            .map_err(|error|format!("Steam could not open its P2P listen socket: {error:?}. Another active Steam proxy may own the socket. Close only your other proxy and retry; settings and saved runs were preserved."))?;
         let poll_group = networking_sockets.create_poll_group().into();
-        Connections {
+        Ok(Connections {
             client: client.clone(),
 
             my_id,
@@ -232,7 +234,7 @@ impl Connections {
             peers: Default::default(),
             connected: Default::default(),
             backlogs: Default::default(),
-        }
+        })
     }
     fn flush(&self) {
         for i in &self.peers {
@@ -512,10 +514,10 @@ impl SteamPeer {
         client: steamworks::Client,
         max_players: u32,
         lobby_data: LobbyExtraData,
-    ) -> Self {
+    ) -> Result<Self,String> {
         let (sender, events) = channel::unbounded();
 
-        let connections = Connections::new(&client);
+        let connections = Connections::new(&client)?;
 
         let matchmaking = client.matchmaking();
         {
@@ -529,8 +531,9 @@ impl SteamPeer {
                             matchmaking.set_lobby_data(
                                 id,
                                 "ew_version",
-                                &Version::current().to_string(),
+                                &crate::frozen_runtime::peer_version().to_string(),
                             );
+                            if let Some(runtime) = crate::frozen_runtime::ID { matchmaking.set_lobby_data(id, "coopplus_runtime", runtime); }
                             matchmaking.set_lobby_data(id, "name", &lobby_data.name);
                             if let Some(game_mode) = lobby_data.game_mode {
                                 matchmaking.set_lobby_data(id, "game_mode", &game_mode.to_string());
@@ -546,7 +549,7 @@ impl SteamPeer {
 
         let my_id = client.user().steam_id();
         let _cbs = make_callbacks(&sender, &client);
-        Self {
+        Ok(Self {
             my_id,
             client,
 
@@ -561,12 +564,12 @@ impl SteamPeer {
             }),
             _cbs,
             connections,
-        }
+        })
     }
 
-    pub fn new_connect(lobby: LobbyId, client: steamworks::Client) -> Self {
+    pub fn new_connect(lobby: LobbyId, client: steamworks::Client) -> Result<Self,String> {
         let (sender, events) = channel::unbounded();
-        let connections = Connections::new(&client);
+        let connections = Connections::new(&client)?;
         let matchmaking = client.matchmaking();
         {
             let sender = sender.clone();
@@ -583,11 +586,15 @@ impl SteamPeer {
                                 .and_then(Version::parse_from_diplay)
                             {
                                 Some(remote_version) => {
-                                    if remote_version != Version::current() {
+                                    let runtime_matches = match crate::frozen_runtime::ID {
+                                        Some(runtime) => matchmaking.lobby_data(id, "coopplus_runtime").as_deref() == Some(runtime),
+                                        None => matchmaking.lobby_data(id, "coopplus_runtime").is_none(),
+                                    };
+                                    if remote_version != crate::frozen_runtime::peer_version() || !runtime_matches {
                                         warn!(
                                             "Could not connect: version mismatch, remote: {}, current: {}",
                                             remote_version,
-                                            Version::current()
+                                            crate::frozen_runtime::peer_version()
                                         );
                                         SteamEvent::LobbyJoinError(ConnectError::VersionMismatch { remote_version })
                                     } else {
@@ -610,7 +617,7 @@ impl SteamPeer {
 
         let my_id = client.user().steam_id();
         let _cbs = make_callbacks(&sender, &client);
-        Self {
+        Ok(Self {
             my_id,
             client,
 
@@ -625,7 +632,7 @@ impl SteamPeer {
             }),
             _cbs,
             connections,
-        }
+        })
     }
 
     pub fn send_message(
@@ -676,7 +683,7 @@ impl SteamPeer {
                 SteamEvent::LobbyError(err) => {
                     warn!("Could not create lobby: {}", err);
                     self.inner.lock().unwrap().state =
-                        ExtraPeerState::Tangled(PeerState::Disconnected);
+                        ExtraPeerState::CouldNotConnect(ConnectError::LobbyCreateFailed(err));
                 }
                 SteamEvent::LobbyJoinError(err) => {
                     warn!("Could not join lobby");

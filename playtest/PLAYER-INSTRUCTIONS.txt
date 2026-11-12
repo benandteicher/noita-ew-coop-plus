@@ -1,0 +1,128 @@
+CO-OP+ PRIVATE PLAYTEST — 1.9.18.4 / BUILD 11
+Frozen runtime: coopplus-20261111-b11-session1
+
+Launcher revisions build11, setup-r2 and setup-r3 use the same b11 gameplay payload
+and peer ID. Setup-r3 adds an explicit first-use preference marker; it leaves
+internal rendering size, controls and existing ready profiles unchanged.
+Existing working build11 folders keep Continue and need no gameplay redownload
+just because a peer uses another launcher revision. If you choose to update the
+launcher, extract its complete ZIP into the SAME TEST folder and keep private intact.
+
+STARTUP / SESSION CORRECTION — November 11, 2026
+Both PCs need matching corrected b11 payload manifests, runtime IDs and component
+hashes. The proxy/startup Lua changed from build7; do not mix build7 and build11.
+Launcher build11/setup-r2/setup-r3 differences alone do not require new gameplay.
+The original build7 ZIP remains preserved.
+
+If you already have accepted build7 private progress
+Close both private games and proxies. Extract this COMPLETE ZIP into the SAME
+TEST launcher folder, replacing the supplied launcher/payload files. Keep its
+private folder intact; do not move, delete, reset or copy individual save files.
+Open Co-op+ Playtest.exe. It verifies the exact supported old package and migrates
+the managed runtime in place, preserving settings, saves, proxy state and generated
+player assets. Interrupted updates retain a journal and recover on the next open.
+An unknown/corrupt package or checkpoint stops visibly; keep it for review.
+The earlier rejected candidate-b7 drafts are deliberately not migration inputs.
+
+Both PCs
+1. Own/install the supported Noita version through Steam, and keep Steam open.
+2. Close Noita and every Co-op+ / Entangled Worlds proxy and updater.
+3. For FIRST setup only, extract the complete TEST ZIP to a new local folder, outside your
+   usual Co-op+ launcher folder, Noita installation and save/profile folders.
+4. Open Co-op+ Playtest.exe. If asked, select noita.exe in your owned installation.
+   First setup physically copies and verifies your game locally. This can take
+   several minutes and needs free disk space for the game. No licensed game
+   content is supplied in the ZIP. Verification shows progress and can be cancelled
+   before launching. Keep the private folder with the launcher. Warm opens still
+   verify integrity; no cached success skips changed game/runtime files.
+5. Check that the proxy title says PLAYTEST and the frozen runtime above.
+
+Host — set these BEFORE the first NEW test run
+6. Use this established four-setting playtest setup:
+   A. In the proxy, click "Show host settings". Under "Game mode", select
+      "Local health alternate" (also described as Local Health / Alternate).
+   B. In the PRIVATE Noita's Mod Settings, open "Entangled Worlds: Co-op+" >
+      "Co-op+ main features (HOST)": set "Enable Cooperative Revival" to ON.
+   C. In that same HOST group, set "Shared income with separate wallets" to ON.
+   D. In the proxy's host settings, leave "Share Gold" OFF. This is pooled gold;
+      it must remain OFF when using separate-wallet shared income.
+
+   Select the proxy choices before hosting or before the first Start Noita action.
+   The lobby shows the active health mode and when the run is locked. Host through
+   Steam, share its lobby code, and start the private game first. Set the
+   two Noita mod choices before selecting NEW GAME in that private game.
+
+   These choices are not all enabled automatically. Fresh defaults are ordinary
+   "Local health", Cooperative Revival OFF, separate-wallet shared income OFF,
+   and proxy "Share Gold" OFF. The host explicitly selects the setup above.
+
+The four switches in "Co-op+ main features (HOST)"
+- "Enable Cooperative Revival": default OFF; use ON for this playtest. Extends
+  Local Health / Alternate. This is a NEW-RUN rule and stays locked in a saved run.
+- "Shared income with separate wallets": default OFF; use ON for this playtest.
+  Supported nuggets credit every connected teammate at 100%; purchases stay
+  personal. This is a NEW-RUN rule. Keep the proxy's "Share Gold" OFF.
+- "Offer Holy Mountain return": default OFF; leave OFF unless deliberately
+  testing it. This CURRENT-RUN option offers a player-confirmed return after a
+  later death in the preceding area. It requires Cooperative Revival and Mountain
+  recovery; it is separate from portal-arrival revival.
+- "Shop spells hover until picked up (experimental)": default OFF; leave OFF
+  unless deliberately testing it. This CURRENT-RUN option affects future Holy
+  Mountain spell stock. Disabling releases suspended stock permanently; it does
+  not repair terrain.
+
+If you already have a test Continue, keep it. Changing either NEW-RUN feature in
+the menu does not enable it retroactively in that saved run. Do not reset an
+existing test run just to follow this sheet; use these choices for a future new
+test run when you deliberately choose to start one.
+
+Joining player
+6. Join that Steam lobby in the matching playtest proxy. Wait until the host has
+   loaded the world and the proxy confirms its run rules, then use Start Noita.
+   A FRESH private character normally shows only New Game in Noita. This is not
+   a failed lobby join: start that character to enter the host's existing run.
+   For a retained matching private character, use Noita Continue. The proxy checks
+   the actual loaded local world and shared run/mode identity before synchronization.
+
+Continuing this test
+7. Save/exit both private games normally and close both test proxies. Reopen the
+   same Co-op+ Playtest.exe. Keep the same host/accounts. Choose Continue at the
+   proxy prompt when offered and Continue in the private Noita menu. Do not
+   choose New game if you want to retain the test run. A saved run keeps its locked
+   proxy rules; edits are queued for a deliberately new run. Older build7 runs have
+   no saved authoritative health-mode record and are labelled legacy/unverified;
+   their historical rules cannot be reconstructed or certified from a seed.
+   Legacy Continue locks the preferences found at proxy startup as unverified;
+   its receipt confirms the loaded world and current received mode, not the
+   historical mode. Later host edits remain queued for a future new run.
+   The launcher never silently
+   resets or repairs test state. An incomplete/corrupt copy stops with an error;
+   retain that folder for investigation.
+   Noita's own New Game can replace its saved character. A later mismatch refusal
+   cannot undo that action. There is no automatic live-save restore or swapping.
+
+Startup / failures / cursor
+The launcher remains as a session guardian. A proven intentional proxy restart
+may replace the proxy at most four times; crashes/refusals are not retried.
+Wait for both private game and proxy to close before switching. Startup/lobby
+failures remain visible, with bounded details in playtest-logs beside the launcher.
+Exit0 alone is not treated as gameplay acceptance. Keep these logs for local review;
+they can contain paths/account IDs and are not a publication artifact.
+Brief startup cursor snapping was investigated but has not reproduced locally.
+No cursor-moving/focus-forcing automation ships. No controller/remote-input/Steam
+or Windows policy was disabled to make a test pass. If it occurs, note whether the
+Windows pointer or only the game reticle moves, the menu shown, and its duration.
+
+Returning to your original run
+8. Close the test game and test proxy. Open your usual CoopPlus.exe and Continue
+   your original run. No live saves, mod folders or updater feeds need swapping,
+   resetting or restoring. Keep normal and test sessions closed before switching.
+
+The test payload is pinned. It does not follow stable Latest. Both players must
+match the b11 payload manifest, runtime ID and gameplay components; launcher
+build11/setup-r2/setup-r3 revisions may differ. It uses Steam; IP/LAN fallback is refused because it
+cannot establish the same matching-peer checks. Two-account/internet play must
+be checked on both PCs; local launch checks cannot establish those results.
+
+This is an experimental playtest. Code recovery alone cannot undo changes already
+saved into a world. Never use a valuable normal run as the test run.

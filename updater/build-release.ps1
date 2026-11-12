@@ -6,6 +6,7 @@ param(
     [string]$OutputDirectory,
     [string]$BaselineArchive,
     [ValidateSet('r14','checkout')][string]$RuntimeSource = 'r14',
+    [string]$FrozenRuntime,
     [string]$Repository = 'benandteicher/noita-ew-coop-plus',
     [switch]$UploadDraft
 )
@@ -41,9 +42,14 @@ using System.Reflection;
     $icon = Join-Path $projectRoot 'noita_proxy\assets\icon.ico'
     & $compiler /nologo /optimize+ /target:exe /platform:anycpu "/out:$buildTemp\CoopPlus.exe" "/win32icon:$icon" (Join-Path $PSScriptRoot 'Bootstrap.cs') $metadataPath
     if ($LASTEXITCODE -ne 0) { throw 'Bootstrap compilation failed.' }
-    & $compiler /nologo /optimize+ /target:exe /platform:anycpu "/out:$buildTemp\CoopUpdater.exe" "/win32icon:$icon" /r:System.Web.Extensions.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll (Join-Path $PSScriptRoot 'Engine.cs') (Join-Path $PSScriptRoot 'Program.cs') (Join-Path $PSScriptRoot 'NoitaDetection.cs') (Join-Path $PSScriptRoot 'Setup.cs') (Join-Path $PSScriptRoot 'ProxyHandoff.cs') $metadataPath
+    $updaterSources = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' -File | ForEach-Object { $_.FullName } | Where-Object { (Split-Path -Leaf $_) -ne 'Bootstrap.cs' })
+    $backupSource = Join-Path $PSScriptRoot 'backup'
+    if (Test-Path -LiteralPath $backupSource) { $updaterSources += @(Get-ChildItem -LiteralPath $backupSource -Filter '*.cs' -File | ForEach-Object { $_.FullName }) }
+    & $compiler /nologo /optimize+ /target:exe /platform:anycpu "/out:$buildTemp\CoopUpdater.exe" "/win32icon:$icon" /r:System.Web.Extensions.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll $updaterSources $metadataPath
     if ($LASTEXITCODE -ne 0) { throw 'Updater compilation failed.' }
-    & python (Join-Path $PSScriptRoot 'release_builder.py') --source-revision $SourceRevision --version $Version --build $Build --output $OutputDirectory --baseline $BaselineArchive --runtime-source $RuntimeSource --bootstrap (Join-Path $buildTemp 'CoopPlus.exe') --updater (Join-Path $buildTemp 'CoopUpdater.exe') --repository $Repository
+    $builderArguments = @('--source-revision', $SourceRevision, '--version', $Version, '--build', $Build, '--output', $OutputDirectory, '--baseline', $BaselineArchive, '--runtime-source', $RuntimeSource, '--bootstrap', (Join-Path $buildTemp 'CoopPlus.exe'), '--updater', (Join-Path $buildTemp 'CoopUpdater.exe'), '--repository', $Repository)
+    if ($FrozenRuntime) { $builderArguments += @('--frozen-runtime', $FrozenRuntime) }
+    & python (Join-Path $PSScriptRoot 'release_builder.py') @builderArguments
     if ($LASTEXITCODE -ne 0) { throw 'Release packaging or verification failed.' }
     if ($UploadDraft) {
         $gh = Get-Command gh -ErrorAction Stop

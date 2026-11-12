@@ -1,6 +1,7 @@
 use bitcode::{Decode, Encode};
 
 pub mod message_socket;
+pub mod terrain_protocol;
 
 pub mod basic_types;
 pub mod des;
