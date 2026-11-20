@@ -1,0 +1,171 @@
+{
+  "schema": 1,
+  "assets": [
+    {
+      "file": "MiSans-Light.ttf",
+      "names": {
+        "1": [
+          "MiSans",
+          "MiSans Light"
+        ],
+        "5": [
+          "Version 4.003"
+        ],
+        "0": [
+          "Copyright © 2020-2023 Beijing Xiaomi Mobile Software Co.,Ltd. All Rights Reserved."
+        ]
+      },
+      "sha256": "3d8dde7ea7d675111c6883661548914bf1a79824a648394f461fef91c180b667",
+      "size": 8127308,
+      "embeddedInProxy": true,
+      "sourcePath": "noita_proxy/assets/font/MiSans-Light.ttf"
+    },
+    {
+      "file": "NotoSans-Regular.ttf",
+      "names": {
+        "0": [
+          "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic)"
+        ],
+        "1": [
+          "Noto Sans"
+        ],
+        "5": [
+          "Version 2.013"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL"
+        ],
+        "14": [
+          "https://scripts.sil.org/OFL"
+        ]
+      },
+      "sha256": "3be6b371cef19ed6add589bd106444ab74c9793bc812d3159298b73d00ee011c",
+      "size": 582748,
+      "embeddedInProxy": true,
+      "sourcePath": "noita_proxy/assets/font/NotoSans-Regular.ttf"
+    },
+    {
+      "file": "NotoSansJP-Light.ttf",
+      "names": {
+        "0": [
+          "(c) 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'."
+        ],
+        "1": [
+          "Noto Sans JP Light"
+        ],
+        "5": [
+          "Version 2.004-H2;hotconv 1.0.118;makeotfexe 2.5.65603"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL"
+        ],
+        "14": [
+          "http://scripts.sil.org/OFL"
+        ]
+      },
+      "sha256": "02615606ea052e945d8c0206cd29e7a8b953210a5b77e71344b7e296ab5c7fc0",
+      "size": 5736752,
+      "embeddedInProxy": true,
+      "sourcePath": "noita_proxy/assets/font/NotoSansJP-Light.ttf"
+    },
+    {
+      "file": "NotoSansKR-Light.ttf",
+      "names": {
+        "0": [
+          "(c) 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'."
+        ],
+        "1": [
+          "Noto Sans KR Light"
+        ],
+        "5": [
+          "Version 2.004-H2;hotconv 1.0.118;makeotfexe 2.5.65603"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL"
+        ],
+        "14": [
+          "http://scripts.sil.org/OFL"
+        ]
+      },
+      "sha256": "2facde0a9a6ed1f3425fd656d4482ad1abe88e55efab8b85906db4889367f13b",
+      "size": 6198972,
+      "embeddedInProxy": true,
+      "sourcePath": "noita_proxy/assets/font/NotoSansKR-Light.ttf"
+    },
+    {
+      "file": "NotoSansSChinese-Light.ttf",
+      "names": {
+        "0": [
+          "Copyright © 2014 Adobe Systems Incorporated. All Rights Reserved."
+        ],
+        "1": [
+          "Noto Sans S Chinese Light"
+        ],
+        "5": [
+          "Version 1.00 November 20, 2017, initial release"
+        ],
+        "13": [
+          "Copyright © 2014 Adobe Systems Incorporated\r\nLicensed under the Apache License, Version 2.0 (the \"License\"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0.html\r\nUnless required by applicable law or agreed to in writing, software distributed under the License is distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License."
+        ],
+        "14": [
+          "http://www.apache.org/licenses/LICENSE-2.0.html"
+        ]
+      },
+      "sha256": "202c570e33d328da604f8280f92f89c96c26861b6f411d46869eb5369577be7e",
+      "size": 9519608,
+      "embeddedInProxy": false,
+      "sourcePath": "noita_proxy/assets/font/NotoSansSChinese-Light.ttf"
+    }
+  ],
+  "agreement": {
+    "url": "https://hyperos.mi.com/font-download/MiSans%E5%AD%97%E4%BD%93%E7%9F%A5%E8%AF%86%E4%BA%A7%E6%9D%83%E8%AE%B8%E5%8F%AF%E5%8D%8F%E8%AE%AE.pdf",
+    "sha256": "4a93a27cd2bd81b3b5ecfd0a853144a876fa26938a93a68443c67d74172fcb86"
+  },
+  "officialMiSansEmbeddingFaq": {
+    "url": "https://hyperos.mi.com/font/en/faq/",
+    "snapshotSha256": "d4b792cd7671ffc398bcd8c0d1f7ac4b5dadbe634bd6fcd91568db8c093458a5"
+  },
+  "scope": "Existing upstream application UI font assets, not Noita game files. Exact embedded metadata retained; standard license text and app-specific notices are distinguished. This evidence records primary terms, not a blanket standalone-font redistribution permission or legal opinion.",
+  "noticeFiles": [
+    {
+      "path": "proxy/licenses/fonts/MISANS-LICENSE.pdf",
+      "size": 79535,
+      "sha256": "4a93a27cd2bd81b3b5ecfd0a853144a876fa26938a93a68443c67d74172fcb86",
+      "sourceUrl": "https://hyperos.mi.com/font-download/MiSans%E5%AD%97%E4%BD%93%E7%9F%A5%E8%AF%86%E4%BA%A7%E6%9D%83%E8%AE%B8%E5%8F%AF%E5%8D%8F%E8%AE%AE.pdf",
+      "kind": "Exact official Xiaomi bilingual license agreement",
+      "retrievedDate": "2026-11-10"
+    },
+    {
+      "path": "proxy/licenses/fonts/NOTO-LATIN-GREEK-CYRILLIC-OFL.txt",
+      "size": 4396,
+      "sha256": "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a",
+      "sourceUrl": "https://raw.githubusercontent.com/notofonts/latin-greek-cyrillic/0ef94805d19e98ed658543a7c48c0a4f19cc0ac0/OFL.txt",
+      "sourceRevision": "0ef94805d19e98ed658543a7c48c0a4f19cc0ac0",
+      "kind": "Exact official Noto font license text"
+    },
+    {
+      "path": "proxy/licenses/fonts/NOTO-CJK-OFL.txt",
+      "size": 4301,
+      "sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2",
+      "sourceUrl": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/LICENSE",
+      "sourceRevision": "f8d157532fbfaeda587e826d4cd5b21a49186f7c",
+      "kind": "Exact official Noto font license text"
+    },
+    {
+      "path": "proxy/licenses/fonts/NOTO-SCHINESE-APACHE-2.0.txt",
+      "size": 10280,
+      "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+      "sourceUrl": "https://raw.githubusercontent.com/spdx/license-list-data/31846481de7ea17d92f2f46fad76abe58b2e9bb0/text/Apache-2.0.txt",
+      "sourceRevision": "31846481de7ea17d92f2f46fad76abe58b2e9bb0",
+      "kind": "Canonical Apache2 terms; exact source font declaration and copyright retained in FONT-PROVENANCE.json"
+    },
+    {
+      "path": "proxy/licenses/fonts/FONT-NOTICES.txt",
+      "size": 1824,
+      "sha256": "55fa47344f76a99ea5b983bcd7de5d1c7213d76c6adccb0b445638cb2c980e02",
+      "kind": "Application attribution and bounded publication guidance",
+      "primaryMiSansFaq": "https://hyperos.mi.com/font/en/faq/",
+      "primaryMiSansAgreement": "https://hyperos.mi.com/font-download/MiSans%E5%AD%97%E4%BD%93%E7%9F%A5%E8%AF%86%E4%BA%A7%E6%9D%83%E8%AE%B8%E5%8F%AF%E5%8D%8F%E8%AE%AE.pdf"
+    }
+  ]
+}

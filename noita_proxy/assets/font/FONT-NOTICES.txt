@@ -1,0 +1,15 @@
+This Co-op+ software uses the MiSans font.
+
+MiSans Light4.003 is embedded as an application UI font, unchanged by this project. Copyright (c)2020-2023 Beijing Xiaomi Mobile Software Co.,Ltd. All Rights Reserved. MiSans is proprietary Xiaomi font software; it is not covered by the project's MIT/Apache licenses. Retain MISANS-LICENSE.pdf and this notice with the application/font copies. Official source, agreement and embedding FAQ:
+https://hyperos.mi.com/font/en/download/
+https://hyperos.mi.com/font/en/faq/
+
+Xiaomi's official FAQ expressly permits embedded fonts with software attribution. The agreement restricts modification and standalone font redistribution; this application/source project is not a standalone font-distribution service. Do not repackage its font assets as a separate font product. Full agreement terms control.
+
+Noto Sans Regular2.013: Copyright2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic). SIL Open Font License1.1; full license in NOTO-LATIN-GREEK-CYRILLIC-OFL.txt.
+
+Noto Sans JP Light2.004-H2 and Noto Sans KR Light2.004-H2: Copyright(c)2014-2021 Adobe (http://www.adobe.com/), Reserved Font Name 'Source'. SIL Open Font License1.1; full license in NOTO-CJK-OFL.txt.
+
+Noto Sans S Chinese Light1.00: Copyright(c)2014 Adobe Systems Incorporated. All Rights Reserved. Apache License2.0, as declared in that exact font's embedded metadata; full terms in NOTO-SCHINESE-APACHE-2.0.txt. This legacy asset is present in the source tree but is not the current Chinese UI font (MiSans is embedded instead).
+
+Exact asset hashes, embedded versions/copyright/license declarations and official notice-source hashes are in FONT-PROVENANCE.json. Font ownership and terms are distinct from project/Cargo licenses. No font was subsetted or otherwise transformed by this task.

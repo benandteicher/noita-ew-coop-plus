@@ -1,0 +1,79 @@
+CO-OP+ PRIVATE TEST — 1.9.18.12 / BUILD 19 / DISCORD r1
+Frozen runtime: coopplus-20261112-b19-presence1
+
+This source is an owner-setup candidate until the registered Co-op+ Discord
+Application ID is bundled and a real desktop card is checked. Do not distribute
+an unset-ID build as completed Discord integration. Published TEST11 stays intact.
+The proposed Latest TEST redirect still selects the explicitly approved TEST11.
+
+First setup on both PCs
+1. Own the supported Noita in Steam and keep Steam open. Close Noita and all EW /
+   Co-op+ proxies, playtest launchers and updaters before setup or switching.
+2. Extract the COMPLETE versioned TEST ZIP into a fresh local folder outside your
+   normal launcher, Noita installation and save/profile folders. Open
+   Co-op+ Playtest.exe and select owned noita.exe if asked. It physically copies
+   and verifies the game locally. First setup can take several minutes. No
+   licensed game files, developer tools, separate presence program or launch flags.
+3. Keep private beside the launcher: game saves, proxy settings/state, logs, temp
+   and runtime stay there. Check PLAYTEST/build19/runtime label. Both peers need
+   matching b19 payload/runtime/components; do not mix b11 and b19 peers.
+
+Existing TEST11 Continue
+4. Close game/proxy/launcher, then extract the COMPLETE new ZIP into the SAME TEST
+   folder, replacing supplied files while keeping private intact. Only accepted
+   b11 manifest1b4b4957f728d79106e82b9ba231fc002bc122c62402c40f7cd32565e2850e29
+   is supported directly. Managed migration verifies originals, journals
+   interruption and preserves settings/state/saves/generated player data. Reopen
+   the SAME launcher and retain proxy Continue and Noita Continue. Never reset,
+   delete or move individual saves to pass a gate. Unknown/corrupt copies refuse.
+   Accepted build7 must first use the preserved TEST11 same-folder migration.
+   Existing extracted folders never auto-update because a download link changes.
+
+Host — before a deliberately NEW test run
+5. Select all four choices explicitly:
+   - Proxy > Show host settings > Game mode: Local health alternate.
+   - PRIVATE Noita > Mod Settings > Entangled Worlds: Co-op+ >
+     Co-op+ main features (HOST): Enable Cooperative Revival ON.
+   - Same HOST group: Shared income with separate wallets ON.
+   - Proxy host settings: Share Gold OFF (pooled gold stays off).
+   Defaults do not enable all four. Leave optional Holy Mountain return and
+   experimental shop-spell hover OFF unless deliberately testing them. NEW-RUN
+   rules stay locked in existing Continue; menu edits do not apply retroactively.
+6. Host through Steam, share the code and load the host world first. The matching
+   client joins and waits for host rules before Start Noita. A fresh private
+   character uses Noita New Game; a retained matching character uses Continue.
+   Old runs without authoritative saved rules remain explicitly legacy/unverified.
+
+Built-in Discord activity
+7. Local proxy preferences: Discord activity defaults ON; Show area names in
+   Discord defaults OFF. The final owner Application ID and immutable approved
+   artwork reference are bundled. Players need no registration, tokens, extra
+   login, manual Discord game entry or side program. The normal Discord desktop
+   client and its own activity/privacy settings still determine visibility.
+8. Only this proxy's actual owned Noita process enables activity, including its
+   menus; the proxy alone does not claim Noita is running. The compact card shows
+   Entangled Worlds, current connected players and current Noita-process session
+   time. Confirmed contexts are In the menus, Exploring, In the Holy Mountain,
+   Spectating a teammate or Awaiting revival. Unproven loading/initial-menu or
+   stale context/count is omitted instead of guessed. The read-only owned-process
+   witness and live data continue independently of minimized proxy UI updates.
+9. Optional ordinary area names only cover the main route. No boss/secret names,
+   coordinates, seed, lobby code or inventory is exposed. Holy Mountain is an
+   explicitly requested coarse context even with ordinary area names off.
+   About Co-op+ opens the project repository. Join Game/invites/extra stats are
+   deferred. Game exit/crash, disabling activity and proxy shutdown clear local
+   presence; absent/late/restarted/unresponsive Discord never blocks gameplay.
+   Local deadlines do not promise Discord-server visibility timing. Actual card,
+   artwork/button and clear behavior still require the owner-desktop check.
+
+Continue and normal play
+10. Save/exit private games normally, close proxies and reopen the SAME folders
+    to check proxy/Noita Continue. Noita New Game can replace a character; a later
+    mismatch refusal cannot undo that choice. Code recovery cannot undo changes
+    already saved into a world. Two-PC/internet acceptance is not inferred from
+    local presence or file-migration fixtures. Keep refusal logs locally; they can
+    contain account IDs/paths and are not public release artifacts.
+11. Routine return: close test game/proxy, open usual CoopPlus.exe and Continue
+    the original run. No live-save swap/reset/restoration, normal mod replacement
+    or feed changes. Keep normal/test sessions closed before switching. TEST
+    remains pinned; neither stable Latest nor the redirect updates extracted data.

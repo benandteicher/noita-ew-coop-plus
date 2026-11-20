@@ -1,0 +1,46 @@
+CO-OP+ PRIVATE TEST 21 — version 1.9.18.14 — rejoin r1
+
+Both PCs need the same complete TEST21 ZIP. This build follows the tested
+TEST19 and TEST20 payloads. Keep the already extracted TEST19 folders as stopped backups.
+
+For a fresh test, extract into a new local folder outside the normal Noita
+installation and saves. Keep Steam open and run Co-op+ Playtest.exe. The
+launcher copies and verifies owned Noita locally. If it asks, select the owned
+noita.exe. Keep the resulting private folder beside the launcher.
+
+To try an existing TEST19 or TEST20 run, close Noita, the proxy and the launcher on both
+PCs first. Make a stopped copy of each whole TEST folder. Keep the originals
+intact. In each copy, extract the complete TEST21 ZIP over the supplied files
+and leave private intact. Only exact supported TEST20, TEST19 and TEST11 predecessors
+are accepted. The launcher checks the managed files and retains saves and
+settings. Keep the host and guest copies on their own PCs.
+
+CONTINUE AND REJOIN
+
+1. The host chooses Continue in the proxy and in Noita for a retained run.
+   Wait for the proxy to say the Noita world and host rules agree.
+2. The guest joins the current Steam lobby. If the host has not loaded a
+   world, wait for confirmation. Use your own matching Continue in Noita.
+3. To rejoin, close your test game normally. Leave the proxy open if it still
+   holds the lobby. Start Noita and choose Continue on your matching run.
+   If the lobby closed, get the current code from the host.
+4. End Run kills active characters. Use the ordinary game exit to keep Continue.
+   If the proxy or game refuses a checkpoint, keep both originals. Select
+   matching stopped copies from the same coordinated stop. The host needs
+   the matching host game and proxy state. Each guest needs their own character.
+
+If the proxy reports a paused terrain chunk, close both games normally and keep
+both TEST folders and their logs. Retry that area on copies from a matching
+checkpoint made before the error. If there is no matching pair, keep the saves
+and report the first error and the chunk. Restarting the proxy does not clear
+the affected chunk. Do not remove recovery records or copy another player's
+save. Terrain reconstruction cannot recover character, inventory or wallet data.
+
+For a deliberately NEW test run, the host selects all four settings before
+starting Noita. Select Local health alternate in the proxy, Cooperative Revival
+ON and Shared income with separate wallets ON in private Noita's Co-op+ host
+settings, and Share Gold OFF in the proxy. The host loads first. Continue keeps
+the current run's settings. Use New Game only on a fresh or backed-up TEST copy.
+
+To return to normal play, close the private test game and proxy, then open the
+usual CoopPlus.exe and Continue. The test package includes no licensed Noita files.

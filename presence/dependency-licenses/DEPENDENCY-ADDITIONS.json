@@ -1,0 +1,36 @@
+{
+  "newDependencies": [
+    {
+      "name": "discord-rich-presence",
+      "version": "1.1.0",
+      "license": "MIT",
+      "crateArchiveSha256": "90c55d69cab17c19677ce3a5f8face993a9e6eaf847fecac3547f3a3ff4a2494",
+      "licenses": [
+        {
+          "path": "discord-rich-presence-1.1.0-LICENSE.txt",
+          "sha256": "4fc331f0241d685e62bc1ec42edecbcdee47bf09fbe547112764416b89bf7d51"
+        }
+      ]
+    },
+    {
+      "name": "uuid",
+      "version": "0.8.2",
+      "license": "Apache-2.0 OR MIT",
+      "crateArchiveSha256": "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7",
+      "licenses": [
+        {
+          "path": "uuid-0.8.2-LICENSE-APACHE.txt",
+          "sha256": "7cfd738c53d61c79f07e348f622bf7707c9084237054d37fbe07788a75f5881c"
+        },
+        {
+          "path": "uuid-0.8.2-LICENSE-MIT.txt",
+          "sha256": "dd23b9037fa9f086b90fb5e908f896a3ed2b4a3eca961792ee0caf77444ea587"
+        }
+      ]
+    }
+  ],
+  "existingPackageVersionsUnchanged": true,
+  "zbusUuidEntryOnlyDisambiguatesExistingVersion": "1.23.2",
+  "sourceCargoLockSha256": "8dae7505d4e9f96346c2718a3d8c14f29f02c2a90cdd790bff5fbc20200523ad",
+  "noBotPlayerTokens": true
+}

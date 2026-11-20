@@ -1,0 +1,140 @@
+{
+  "fake_unix_session_start": 1800000000,
+  "mock": true,
+  "notice": "Simulated preview from the production activity formatter; not a Discord screenshot or live card.",
+  "samples": [
+    {
+      "activity": {
+        "assets": {
+          "large_image": "coopplus_logo_staging",
+          "large_text": "Co-op+ \u00b7 Entangled Worlds"
+        },
+        "buttons": [
+          {
+            "label": "About Co-op+",
+            "url": "https://github.com/benandteicher/noita-ew-coop-plus"
+          }
+        ],
+        "details": "Entangled Worlds \u00b7 2 connected players",
+        "name": "Noita: Co-op+",
+        "state": "In the menus",
+        "timestamps": {
+          "start": 1800000000
+        },
+        "type": 0
+      },
+      "scenario": "menus"
+    },
+    {
+      "activity": {
+        "assets": {
+          "large_image": "coopplus_logo_staging",
+          "large_text": "Co-op+ \u00b7 Entangled Worlds"
+        },
+        "buttons": [
+          {
+            "label": "About Co-op+",
+            "url": "https://github.com/benandteicher/noita-ew-coop-plus"
+          }
+        ],
+        "details": "Entangled Worlds \u00b7 2 connected players",
+        "name": "Noita: Co-op+",
+        "state": "Exploring",
+        "timestamps": {
+          "start": 1800000000
+        },
+        "type": 0
+      },
+      "scenario": "exploring_default"
+    },
+    {
+      "activity": {
+        "assets": {
+          "large_image": "coopplus_logo_staging",
+          "large_text": "Co-op+ \u00b7 Entangled Worlds"
+        },
+        "buttons": [
+          {
+            "label": "About Co-op+",
+            "url": "https://github.com/benandteicher/noita-ew-coop-plus"
+          }
+        ],
+        "details": "Entangled Worlds \u00b7 2 connected players",
+        "name": "Noita: Co-op+",
+        "state": "Exploring \u00b7 Mines",
+        "timestamps": {
+          "start": 1800000000
+        },
+        "type": 0
+      },
+      "scenario": "exploring_opt_in_mines"
+    },
+    {
+      "activity": {
+        "assets": {
+          "large_image": "coopplus_logo_staging",
+          "large_text": "Co-op+ \u00b7 Entangled Worlds"
+        },
+        "buttons": [
+          {
+            "label": "About Co-op+",
+            "url": "https://github.com/benandteicher/noita-ew-coop-plus"
+          }
+        ],
+        "details": "Entangled Worlds \u00b7 2 connected players",
+        "name": "Noita: Co-op+",
+        "state": "In the Holy Mountain",
+        "timestamps": {
+          "start": 1800000000
+        },
+        "type": 0
+      },
+      "scenario": "holy_mountain"
+    },
+    {
+      "activity": {
+        "assets": {
+          "large_image": "coopplus_logo_staging",
+          "large_text": "Co-op+ \u00b7 Entangled Worlds"
+        },
+        "buttons": [
+          {
+            "label": "About Co-op+",
+            "url": "https://github.com/benandteicher/noita-ew-coop-plus"
+          }
+        ],
+        "details": "Entangled Worlds \u00b7 2 connected players",
+        "name": "Noita: Co-op+",
+        "state": "Spectating a teammate",
+        "timestamps": {
+          "start": 1800000000
+        },
+        "type": 0
+      },
+      "scenario": "spectating_teammate"
+    },
+    {
+      "activity": {
+        "assets": {
+          "large_image": "coopplus_logo_staging",
+          "large_text": "Co-op+ \u00b7 Entangled Worlds"
+        },
+        "buttons": [
+          {
+            "label": "About Co-op+",
+            "url": "https://github.com/benandteicher/noita-ew-coop-plus"
+          }
+        ],
+        "details": "Entangled Worlds \u00b7 2 connected players",
+        "name": "Noita: Co-op+",
+        "state": "Awaiting revival",
+        "timestamps": {
+          "start": 1800000000
+        },
+        "type": 0
+      },
+      "scenario": "awaiting_revival"
+    }
+  ],
+  "synthetic_connected_players": 2
+}

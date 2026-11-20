@@ -1,0 +1,42 @@
+CO-OP+ STAGING 1.9.18.16 build 23
+
+Extract this ZIP into a fresh local folder on each PC. Keep Steam open,
+open Co-op+ Staging.exe and select Launch Staging. If asked, choose the
+noita.exe from your own installation. Keep both PCs on the same Staging
+build. Staging stores its own game, preferences, saves and proxy state
+under staging-private. Keep your existing Stable and TEST folders.
+
+First setup imports supported video, audio and bindings from the local
+Noita profile. Review the settings in Noita. Changes you make in Staging
+stay with Staging. The first launch uses a validated window size.
+
+For a new host run, Local Health / Alternate, Cooperative Revival, held
+statue revival, New Holy Mountain arrival revival, separate-wallet income
+and shop spell hover start enabled. Pooled Share Gold starts off. Ping+
+is available. Discord activity starts on and area names start off.
+For an existing Staging run, choose Continue in both the proxy and Noita.
+
+Close the game and proxy normally to keep Continue. To rejoin an open
+lobby, reopen Noita through its proxy and choose Continue. If the proxy
+reports a world mismatch, keep both stopped folders and check the game
+and proxy choices. A paused terrain chunk needs separate attention.
+Keep each player's own backup from the same coordinated stop.
+
+Select Export logs in the launcher even after a startup failure. It
+shows where it saved the dated ZIP or numbered ZIPs. The files contain
+diagnostic events and privacy markers for withheld text.
+Match the R- labels in INDEX.txt between PCs for accepted shared runs.
+Use UTC time and role for failed attempts with no recorded shared run.
+
+If you already use the sealed build 22, close its launcher, proxy and
+game. Extract this ZIP over that same Staging folder and open the new
+launcher. Select Check for update and confirm the bundled build 23.
+Keep the same folder, and choose Continue in both the proxy and Noita.
+
+When updates are available, close Noita and its proxy, then select Check
+for update. Confirm the offered version. Your private run, preferences
+and logs stay in the same folder. The public Staging download link is
+for new downloads.
+
+To play your usual Stable run, close Staging and open your usual launcher.
+The archive contains no licensed Noita game files.
