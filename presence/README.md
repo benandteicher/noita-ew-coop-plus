@@ -1,6 +1,6 @@
 # Built-in Discord activity
 
-Staging build 23 bundles the owner’s **Noita Co-op +** Discord application
+Staging bundles the owner’s **Noita Co-op +** Discord application
 (`1570660264435781652`) and sends `assets.large_image` as
 `coopplus_logo_staging`. The normal build selection keeps `coopplus_logo`
 and the original window artwork. Players receive the public Application ID
@@ -11,12 +11,16 @@ The proxy publishes during its owned Noita process and requests a clear on
 game exit, opt-out and proxy shutdown. Discord Activity starts on and area
 names start off. `presentation-samples.json` and `presentation-preview.html`
 show simulated activity from this formatter and the supplied Staging PNG.
-A visible Discord card still needs a check on a PC with Discord desktop.
+Public build 23 showed the card with Staging artwork on the signed-in test
+PC and cleared it on private Noita exit. Build 24 reports the failed local
+pipe, READY or SET_ACTIVITY stage in the proxy with a numeric error code
+when available. It keeps Discord reply text and account data out of this
+diagnostic.
 
 ## Historical TEST19 workflow
 
 The setup and publication history below refers to the original TEST19
-candidate. Use the Staging build and publication handoff for build 23.
+candidate. Use the currently approved Staging publication handoff.
 
 Implementation and focused local checks are prepared. This candidate deliberately
 has no Application ID. It cannot claim a working Discord card until the owner

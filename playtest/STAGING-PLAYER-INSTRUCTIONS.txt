@@ -1,4 +1,4 @@
-CO-OP+ STAGING 1.9.18.16 build 23
+CO-OP+ STAGING 1.9.18.17 build 24
 
 Extract this ZIP into a fresh local folder on each PC. Keep Steam open,
 open Co-op+ Staging.exe and select Launch Staging. If asked, choose the
@@ -28,15 +28,19 @@ diagnostic events and privacy markers for withheld text.
 Match the R- labels in INDEX.txt between PCs for accepted shared runs.
 Use UTC time and role for failed attempts with no recorded shared run.
 
+With an existing build 23 installation, close Noita and its proxy. Use
+Check for update from the launcher you already have when build 24 is
+selected on the Staging feed. Confirm the offered version. Your private
+run, preferences and logs stay in the same folder. The public Staging
+download link is for new downloads.
+
 If you already use the sealed build 22, close its launcher, proxy and
 game. Extract this ZIP over that same Staging folder and open the new
-launcher. Select Check for update and confirm the bundled build 23.
-Keep the same folder, and choose Continue in both the proxy and Noita.
+launcher. Select Check for update and confirm the bundled build 24.
 
-When updates are available, close Noita and its proxy, then select Check
-for update. Confirm the offered version. Your private run, preferences
-and logs stay in the same folder. The public Staging download link is
-for new downloads.
+When Discord activity fails, open Game Settings in the proxy while
+Noita is running. The activity line shows the failed stage and error
+code when available. Share that line to help diagnose the connection.
 
 To play your usual Stable run, close Staging and open your usual launcher.
 The archive contains no licensed Noita game files.

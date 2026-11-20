@@ -1578,7 +1578,11 @@ fn discord_settings(ui: &mut Ui, state: &mut AppSavedState, presence: &crate::di
             Availability::InvalidSetup => "Discord activity is unavailable: the bundled application setup is invalid.",
             Availability::Unsupported => "Discord activity is unavailable on this platform or launch environment.",
             Availability::WaitingForGame => "Discord activity waits for Noita launched by this proxy.",
-            Availability::WaitingForDiscord => "Discord activity waits for the Discord desktop app; the game can continue.",
+            Availability::WaitingForDiscord => "Connecting Discord activity; the game can continue.",
+            Availability::IpcFailed(failure) => {
+                ui.small(format!("{} Retrying while Noita runs.", failure.description()));
+                return changed;
+            }
             Availability::Connected => "Discord activity connected. Your Discord privacy settings still control visibility.",
         };
         ui.small(message);

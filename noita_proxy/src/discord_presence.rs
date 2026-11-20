@@ -352,7 +352,103 @@ impl Config {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Availability { SetupRequired, InvalidSetup, Unsupported, WaitingForGame, WaitingForDiscord, Connected }
+pub(crate) enum Availability {
+    SetupRequired,
+    InvalidSetup,
+    Unsupported,
+    WaitingForGame,
+    WaitingForDiscord,
+    IpcFailed(IpcFailure),
+    Connected,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IpcStage {
+    OpenPipe,
+    Ready,
+    SetActivity,
+    ClearActivity,
+}
+
+impl IpcStage {
+    fn operation(self) -> &'static str {
+        match self {
+            Self::OpenPipe => "open the local pipe",
+            Self::Ready => "complete the READY handshake",
+            Self::SetActivity => "set activity",
+            Self::ClearActivity => "clear activity",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IpcError {
+    Windows(i32),
+    Discord(Option<i32>),
+    Io(io::ErrorKind),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct IpcFailure {
+    stage: IpcStage,
+    error: IpcError,
+}
+
+impl IpcFailure {
+    fn new(stage: IpcStage, error: &io::Error) -> Self {
+        let error = if let Some(code) = error.raw_os_error() {
+            IpcError::Windows(code)
+        } else if let Some(reply) = error.get_ref().and_then(|inner| inner.downcast_ref::<DiscordReplyError>()) {
+            IpcError::Discord(reply.0)
+        } else {
+            IpcError::Io(error.kind())
+        };
+        Self { stage, error }
+    }
+
+    pub(crate) fn description(self) -> String {
+        let detail = match self.error {
+            IpcError::Windows(2) if self.stage == IpcStage::OpenPipe => "pipe not found, Windows error 2".to_owned(),
+            IpcError::Windows(code) => format!("Windows error {code}"),
+            IpcError::Discord(Some(code)) => format!("Discord error {code}"),
+            IpcError::Discord(None) => "Discord rejected or closed the request".to_owned(),
+            IpcError::Io(io::ErrorKind::TimedOut) => "timed out".to_owned(),
+            IpcError::Io(io::ErrorKind::NotFound) => "pipe not found".to_owned(),
+            IpcError::Io(io::ErrorKind::InvalidData) => "invalid reply".to_owned(),
+            IpcError::Io(_) => "connection interrupted".to_owned(),
+        };
+        // Never use the original error text. Discord replies can contain account data.
+        format!("Discord activity could not {} ({detail}).", self.stage.operation())
+    }
+}
+
+#[derive(Debug)]
+struct DiscordReplyError(Option<i32>);
+
+impl std::fmt::Display for DiscordReplyError {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str("Discord IPC request failed")
+    }
+}
+
+impl std::error::Error for DiscordReplyError {}
+
+fn discord_rejection(kind: io::ErrorKind, code: Option<&Value>) -> io::Error {
+    let code = code.and_then(Value::as_i64).and_then(|number| i32::try_from(number).ok());
+    io::Error::new(kind, DiscordReplyError(code))
+}
+
+fn report_ipc_failure(status: &watch::Sender<Availability>, stage: IpcStage, error: &io::Error) {
+    let failure = IpcFailure::new(stage, error);
+    if status.send_if_modified(|current| {
+        let next = Availability::IpcFailed(failure);
+        if *current == next { return false; }
+        *current = next;
+        true
+    }) {
+        tracing::warn!("{}", failure.description());
+    }
+}
 
 pub(crate) struct Presence {
     desired: watch::Sender<Option<Snapshot>>,
@@ -422,7 +518,10 @@ impl Connector for PipeConnector {
             // ClientOptions::open uses overlapped IO and returns immediately for
             // absent/busy local pipes. Never WaitNamedPipe or follow remote paths.
             match open_local_pipe(&format!(r"\\?\pipe\discord-ipc-{index}")) {
-                Ok(pipe) => return Ok(pipe), Err(error) => last = error,
+                Ok(pipe) => return Ok(pipe),
+                // Preserve the first actionable error when subsequent slots are absent.
+                Err(error) if last.kind() == io::ErrorKind::NotFound => last = error,
+                Err(_) => {}
             }
         }
         Err(last)
@@ -459,14 +558,19 @@ async fn reply<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut S, nonce: Option<
             3 => write_frame(stream, 4, &body).await?,
             1 => {
                 let value: Value = serde_json::from_slice(&body).map_err(|_| invalid("Invalid Discord reply"))?;
-                if value.get("evt").and_then(Value::as_str) == Some("ERROR") { return Err(invalid("Discord rejected activity")); }
+                if value.get("evt").and_then(Value::as_str) == Some("ERROR") {
+                    return Err(discord_rejection(io::ErrorKind::InvalidData, value.pointer("/data/code")));
+                }
                 if let Some(nonce) = nonce {
                     if value.get("nonce").and_then(Value::as_str) == Some(nonce) && value.get("cmd").and_then(Value::as_str) == Some("SET_ACTIVITY") { return Ok(()); }
                 } else if value.get("evt").and_then(Value::as_str) == Some("READY")
                     && value.get("cmd").and_then(Value::as_str) == Some("DISPATCH")
                     && value.pointer("/data/v").and_then(Value::as_u64) == Some(1) { return Ok(()); }
             }
-            2 => return Err(io::Error::new(io::ErrorKind::ConnectionAborted, "Discord closed IPC")),
+            2 => {
+                let value: Option<Value> = serde_json::from_slice(&body).ok();
+                return Err(discord_rejection(io::ErrorKind::ConnectionAborted, value.as_ref().and_then(|reply| reply.get("code"))));
+            }
             _ => return Err(invalid("Unexpected Discord opcode")),
         }
     }
@@ -517,6 +621,12 @@ async fn clear<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut S, sent: &Option<
     Ok(())
 }
 
+fn log_clear_failure(error: &io::Error) {
+    if error.kind() != io::ErrorKind::WouldBlock {
+        tracing::warn!("{}", IpcFailure::new(IpcStage::ClearActivity, error).description());
+    }
+}
+
 async fn run<C: Connector>(mut connector: C, config: Config, mut desired: watch::Receiver<Option<Snapshot>>, status: watch::Sender<Availability>, timing: Timing) {
     let mut stream = None;
     let mut sent: Option<Snapshot> = None;
@@ -531,7 +641,11 @@ async fn run<C: Connector>(mut connector: C, config: Config, mut desired: watch:
         if let Some(snapshot) = wanted.as_mut() { snapshot.refresh(Instant::now()); }
         if wanted.as_ref().is_some_and(|snapshot|!snapshot.game.is_alive()) { wanted = None; }
         if wanted.is_none() || closed {
-            if let Some(mut pipe) = stream.take() { let _ = clear(&mut pipe, &sent, &mut sequence, timing, &mut budget).await; }
+            if let Some(mut pipe) = stream.take() {
+                if let Err(error) = clear(&mut pipe, &sent, &mut sequence, timing, &mut budget).await {
+                    log_clear_failure(&error);
+                }
+            }
             sent = None;
             status.send_replace(Availability::WaitingForGame);
             let now=Instant::now();let available=budget.available_at(now);
@@ -550,14 +664,23 @@ async fn run<C: Connector>(mut connector: C, config: Config, mut desired: watch:
             }
             // Refresh after waiting: do not connect/publish an already disabled snapshot.
             let Some(game) = desired.borrow().as_ref().filter(|snapshot|snapshot.game.is_alive()).map(|snapshot|snapshot.game.clone()) else { continue; };
-            status.send_replace(Availability::WaitingForDiscord);
+            status.send_if_modified(|current| {
+                if *current != Availability::WaitingForGame { return false; }
+                *current = Availability::WaitingForDiscord;
+                true
+            });
+            let mut stage = IpcStage::OpenPipe;
             match bounded_alive(timing.io, &game, async {
                 let mut pipe = connector.connect().await?;
+                stage = IpcStage::Ready;
                 handshake(&mut pipe, &config).await?;
                 Ok(pipe)
             }).await {
                 Ok(pipe) => { stream = Some(pipe); sent = None; next_send = time::Instant::now(); }
-                Err(_) => { next_retry = time::Instant::now() + timing.retry; }
+                Err(error) => {
+                    if game.is_alive() { report_ipc_failure(&status, stage, &error); }
+                    next_retry = time::Instant::now() + timing.retry;
+                }
             }
             continue;
         }
@@ -569,7 +692,8 @@ async fn run<C: Connector>(mut connector: C, config: Config, mut desired: watch:
         if (!same && (urgent || now >= next_send)) || (sent.is_some() && now >= heartbeat) {
             let pipe = stream.as_mut().unwrap();
             if sent.as_ref().map(|s|&s.game) != wanted.as_ref().map(|s|&s.game) {
-                if clear(pipe, &sent, &mut sequence, timing, &mut budget).await.is_err() {
+                if let Err(error) = clear(pipe, &sent, &mut sequence, timing, &mut budget).await {
+                    log_clear_failure(&error);
                     stream = None; sent = None; status.send_replace(Availability::WaitingForDiscord);
                     next_retry=(time::Instant::now()+timing.retry).max(time::Instant::from_std(budget.available_at(Instant::now())));continue;
                 }
@@ -588,8 +712,20 @@ async fn run<C: Connector>(mut connector: C, config: Config, mut desired: watch:
             }
             sequence = sequence.wrapping_add(1);
             match bounded_alive(timing.io, &snapshot.game, set_activity(pipe, snapshot.game.pid, snapshot.activity(&config.artwork_image), sequence)).await {
-                Ok(()) => { sent = wanted; status.send_replace(Availability::Connected); next_send = time::Instant::now() + timing.update; heartbeat = time::Instant::now() + timing.heartbeat; }
-                Err(_) => { stream = None; sent = None; status.send_replace(Availability::WaitingForDiscord); next_retry = time::Instant::now() + timing.retry; }
+                Ok(()) => {
+                    sent = wanted;
+                    if status.send_replace(Availability::Connected) != Availability::Connected {
+                        tracing::info!("Discord activity connected: local pipe opened, READY received and SET_ACTIVITY acknowledged.");
+                    }
+                    next_send = time::Instant::now() + timing.update;
+                    heartbeat = time::Instant::now() + timing.heartbeat;
+                }
+                Err(error) => {
+                    stream = None;
+                    sent = None;
+                    if snapshot.game.is_alive() { report_ipc_failure(&status, IpcStage::SetActivity, &error); }
+                    next_retry = time::Instant::now() + timing.retry;
+                }
             }
             continue;
         }
@@ -777,6 +913,61 @@ mod tests {
         let (op,_)=read_frame(&mut server).await.unwrap();assert_eq!(op,0);write_frame(&mut server,1,br#"{"evt":"READY","cmd":"DISPATCH","data":{"v":1}}"#).await.unwrap();
         while let Ok((op,bytes))=read_frame(&mut server).await {assert_eq!(op,1);let value:Value=serde_json::from_slice(&bytes).unwrap();let nonce=value["nonce"].clone();let _=updates.send(value);let _=write_frame(&mut server,1,&serde_json::to_vec(&json!({"cmd":"SET_ACTIVITY","nonce":nonce})).unwrap()).await;}
     }
+    #[tokio::test]
+    async fn ipc_failures_keep_the_failed_stage_and_only_numeric_codes() {
+        let denied = IpcFailure::new(IpcStage::OpenPipe, &io::Error::from_raw_os_error(5));
+        assert_eq!(denied.description(), "Discord activity could not open the local pipe (Windows error 5).");
+
+        let (mut client, mut server) = duplex(4096);
+        write_frame(&mut server, 2, br#"{"code":4000,"message":"private account text"}"#).await.unwrap();
+        let error = reply(&mut client, None).await.unwrap_err();
+        let failed = IpcFailure::new(IpcStage::Ready, &error);
+        assert_eq!(failed.description(), "Discord activity could not complete the READY handshake (Discord error 4000).");
+
+        write_frame(&mut server, 1, br#"{"evt":"ERROR","data":{"code":"private account text"}}"#).await.unwrap();
+        let error = reply(&mut client, Some("local-test-nonce")).await.unwrap_err();
+        let failed = IpcFailure::new(IpcStage::SetActivity, &error);
+        assert_eq!(failed.error, IpcError::Discord(None));
+        assert!(!failed.description().contains("private account text"));
+    }
+
+    #[tokio::test]
+    async fn ipc_status_distinguishes_failure_stages_and_recovers_after_acknowledgement() {
+        let streams = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+        let connector = FakeConnector { streams: streams.clone(), attempts: Arc::new(AtomicUsize::new(0)) };
+        let (desired, rx) = watch::channel(Some(snapshot()));
+        let (status, mut updates) = watch::channel(Availability::WaitingForGame);
+        let mut timing = fast();
+        timing.io = Duration::from_millis(150);
+        let actor = tokio::spawn(run(connector, config(), rx, status, timing));
+        let limit = Duration::from_secs(2);
+        let absent = Availability::IpcFailed(IpcFailure { stage: IpcStage::OpenPipe, error: IpcError::Io(io::ErrorKind::NotFound) });
+        time::timeout(limit, updates.wait_for(|state| *state == absent)).await.unwrap().unwrap();
+
+        let (client, _stalled) = duplex(4096);
+        streams.lock().unwrap().push_back(client);
+        let unready = Availability::IpcFailed(IpcFailure { stage: IpcStage::Ready, error: IpcError::Io(io::ErrorKind::TimedOut) });
+        time::timeout(limit, updates.wait_for(|state| *state == unready)).await.unwrap().unwrap();
+
+        let (client, mut rejecting) = duplex(4096);
+        streams.lock().unwrap().push_back(client);
+        assert_eq!(bounded(limit, read_frame(&mut rejecting)).await.unwrap().0, 0);
+        write_frame(&mut rejecting, 1, br#"{"evt":"READY","cmd":"DISPATCH","data":{"v":1}}"#).await.unwrap();
+        assert_eq!(bounded(limit, read_frame(&mut rejecting)).await.unwrap().0, 1);
+        write_frame(&mut rejecting, 1, br#"{"evt":"ERROR","data":{"code":4000,"message":"private account text"}}"#).await.unwrap();
+        let rejected = Availability::IpcFailed(IpcFailure { stage: IpcStage::SetActivity, error: IpcError::Discord(Some(4000)) });
+        time::timeout(limit, updates.wait_for(|state| *state == rejected)).await.unwrap().unwrap();
+
+        let (client, healthy) = duplex(4096);
+        streams.lock().unwrap().push_back(client);
+        let (sent, _received) = tokio::sync::mpsc::unbounded_channel();
+        let healthy = tokio::spawn(fake_discord(healthy, sent));
+        time::timeout(limit, updates.wait_for(|state| *state == Availability::Connected)).await.unwrap().unwrap();
+        drop(desired);
+        time::timeout(limit, actor).await.unwrap().unwrap();
+        time::timeout(limit, healthy).await.unwrap().unwrap();
+    }
+
     #[tokio::test] async fn actor_coalesces_clears_and_shutdown_does_not_wait_on_discord() {
         let (client,server)=duplex(4096);let (updates,mut got)=tokio::sync::mpsc::unbounded_channel();let fake=tokio::spawn(fake_discord(server,updates));
         let connector=FakeConnector{streams:Arc::new(std::sync::Mutex::new(VecDeque::from([client]))),attempts:Arc::new(AtomicUsize::new(0))};let (tx,rx)=watch::channel(None);let (status,_)=watch::channel(Availability::WaitingForGame);let actor=tokio::spawn(run(connector,config(),rx,status,fast()));
