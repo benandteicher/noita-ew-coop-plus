@@ -1,16 +1,90 @@
 <!doctype html>
 <html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer">
-<meta http-equiv="refresh" content="3;url=https://github.com/benandteicher/noita-ew-coop-plus/releases/download/coopplus-staging-v1.9.18.16-b23/Noita-CoopPlus-1.9.18.16-build23-STAGING-win.zip">
-<title>Co-op+ Staging download</title>
-<style>body{font:1rem/1.6 system-ui,sans-serif;max-width:42rem;margin:9vh auto;padding:0 1.25rem}code{overflow-wrap:anywhere}</style>
-<main>
-<h1>Co-op+ Staging download</h1>
-<p>Opening Staging 1.9.18.16 build 23.</p>
-<p><a href="https://github.com/benandteicher/noita-ew-coop-plus/releases/download/coopplus-staging-v1.9.18.16-b23/Noita-CoopPlus-1.9.18.16-build23-STAGING-win.zip" rel="noreferrer">Download the Windows ZIP</a></p>
-<p>SHA-256 <code>cf1e51147c0d85cadf2e79a4120644da31d18f62053b5178af1c4c5d4c00eaeb</code></p>
-<p>Extract to a new folder and open <strong>Co-op+ Staging.exe</strong>. To update an existing Staging installation, close the game and proxy and use <strong>Check for update</strong>.</p>
-</main>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Co-op+ Staging download</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font: 100%/1.55 system-ui, sans-serif;
+      color: #f1f5f9;
+      background: #11171e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: clamp(1rem, 5vw, 2.5rem);
+    }
+    main {
+      width: min(100%, 39rem);
+      margin: clamp(1rem, 7vh, 4.5rem) auto;
+      padding: clamp(1.25rem, 5vw, 2.75rem);
+      border: 1px solid #364552;
+      border-radius: 1rem;
+      background: #1a232c;
+    }
+    p, h1, dl, dd { margin: 0; }
+    .product { color: #bdceda; font-size: .9375rem; font-weight: 650; }
+    h1 {
+      margin-top: .55rem;
+      font-size: clamp(2.5rem, 7vw, 3.5rem);
+      line-height: 1.1;
+      letter-spacing: -.045em;
+    }
+    .purpose { margin-top: .6rem; font-size: 1.125rem; }
+    .version { margin-top: .35rem; color: #bdceda; font-size: .9375rem; }
+    a { color: #a7e9dd; text-underline-offset: .21em; }
+    a:hover { color: #d7fff7; }
+    a:focus-visible { outline: 3px solid #ffd88b; outline-offset: .25rem; }
+    .download {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 3.25rem;
+      margin-top: 1.6rem;
+      padding: .65rem 1.15rem;
+      border-radius: .55rem;
+      background: #a7e9dd;
+      color: #102822;
+      font-weight: 750;
+      text-align: center;
+      text-decoration: none;
+    }
+    .download:hover { background: #ccf5ec; color: #102822; }
+    dl { margin-top: 1.8rem; border-top: 1px solid #364552; }
+    dl div {
+      display: grid;
+      grid-template-columns: minmax(0, 8.75rem) minmax(0, 1fr);
+      gap: .3rem .9rem;
+      padding: .9rem 0;
+      border-bottom: 1px solid #364552;
+    }
+    dt { font-weight: 650; }
+    dd { color: #d7e0e8; overflow-wrap: anywhere; }
+    dd strong { display: inline-block; max-width: 100%; }
+    nav { display: flex; flex-wrap: wrap; gap: 0 1.3rem; margin-top: .75rem; }
+    nav a { display: inline-flex; align-items: center; min-height: 2.75rem; font-size: .9375rem; }
+    @media (max-width: 30rem) {
+      .download { display: flex; }
+      dl div { grid-template-columns: minmax(0, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <main aria-labelledby="channel">
+    <p class="product">Noita Co-op+</p>
+    <h1 id="channel">Staging</h1>
+    <p class="purpose">Playtesting</p>
+    <p class="version">Version 1.9.18.16 · Build 23</p>
+    <a class="download" href="https://github.com/benandteicher/noita-ew-coop-plus/releases/download/coopplus-staging-v1.9.18.16-b23/Noita-CoopPlus-1.9.18.16-build23-STAGING-win.zip">Download for Windows</a>
+    <dl>
+      <div><dt>New players</dt><dd>Extract the ZIP into a separate folder and open <strong>Co-op+ Staging.exe</strong>.</dd></div>
+      <div><dt>Returning players</dt><dd>Close Noita and the proxy, then choose <strong>Check for update</strong> in the Staging launcher.</dd></div>
+    </dl>
+    <nav aria-label="Download channels">
+      <a href="../stable/">Switch to Stable</a>
+    </nav>
+  </main>
+</body>
 </html>
