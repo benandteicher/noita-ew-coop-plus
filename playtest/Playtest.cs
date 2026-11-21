@@ -31,9 +31,9 @@ namespace CoopPlusPlaytest {
     }
     public sealed class VerifiedPayload { public string package, payload; public Manifest manifest; public string hash; }
     public static class Playtest {
-        public const string RuntimeId = "coopplus-staging-b24-v1.9.18.17";
-        public const string Version = "1.9.18.17";
-        public const long Build = 24;
+        public const string RuntimeId = "coopplus-staging-b25-v1.9.18.18";
+        public const string Version = "1.9.18.18";
+        public const long Build = 25;
         public const string Channel = "staging";
         internal const string PrivateName = "staging-private";
         internal const string PayloadName = "staging-payload";

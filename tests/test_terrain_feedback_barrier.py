@@ -125,12 +125,19 @@ class TerrainFeedbackBarrierTests(unittest.TestCase):
         fixture().execute(
             """
             reset(1)
-            assert(not boundary:handle(command(0, 2, 'blocked')))
+            local application = command(0, 2, 'blocked')
+            assert(not boundary:handle(application))
             assert(last_sent(7) == le(2, 8) .. session .. le(1, 4) .. remaining_six)
             assert(count_sent(2) == 1 and count_sent(4) == 0)
             assert(not boundary:before_capture(0, 0))
             cells[0] = 9 -- Legitimate edit after the verified prefix.
+            loaded = false
             assert(not boundary:before_capture(0, 0))
+            loaded = true
+            frame = frame + 120
+            assert(not boundary:before_capture(0, 0))
+            assert(not boundary:handle(application), 'a duplicate decline retried the constructor')
+            assert(count_sent(7) == 1 and count_sent(2) == 1, 'a blocked application sent a completion ACK')
             assert(cells[0] == 9 and apply_calls == 1)
             assert(boundary:handle(command(0, 3, 'sparse_new', 2, 3)))
             assert(cells[2] == 3 and apply_calls == 2)

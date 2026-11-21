@@ -1,6 +1,8 @@
 // Type defs borrowed from NoitaPatcher.
 
 use std::ffi::{c_char, c_void};
+#[cfg(all(windows, target_arch = "x86"))]
+use std::mem::MaybeUninit;
 
 pub(crate) const CELLDATA_SIZE: isize = 0x290;
 
@@ -32,6 +34,10 @@ pub(crate) struct CellData {
     material_type: i32,
     id_2: i32,
     pub(crate) cell_type: CellType,
+    #[cfg(all(windows, target_arch = "x86"))]
+    _texture_fields: MaybeUninit<[u8; 0x50]>,
+    #[cfg(all(windows, target_arch = "x86"))]
+    pub(crate) cell_holes_in_texture: u8,
     // Has a bunch of other fields that aren't that relevant.
 }
 
@@ -52,8 +58,8 @@ pub(crate) struct Cell {
 #[repr(C)]
 pub(crate) struct LiquidCell {
     cell: Cell,
-    x: i32,
-    y: i32,
+    pub(crate) x: i32,
+    pub(crate) y: i32,
     unknown1: c_char,
     unknown2: c_char,
     // Foreign memory. A Rust bool has only two valid bit patterns, even
@@ -61,6 +67,13 @@ pub(crate) struct LiquidCell {
     pub(crate) is_static: u8,
     // Has a bunch of other fields that aren't that relevant.
 }
+
+#[cfg(all(windows, target_arch = "x86"))]
+const _: () = {
+    assert!(std::mem::offset_of!(CellData, cell_holes_in_texture) == 0x8c);
+    assert!(std::mem::offset_of!(LiquidCell, x) == 0x18);
+    assert!(std::mem::offset_of!(LiquidCell, y) == 0x1c);
+};
 
 pub(crate) fn wire_static_flag(engine_byte: u8) -> u8 {
     u8::from(engine_byte != 0)

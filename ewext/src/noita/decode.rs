@@ -153,6 +153,79 @@ fn code_matches(code: &[u8], known: &[&[u8]]) -> bool {
     known.iter().any(|k| code.starts_with(k))
 }
 
+#[cfg(all(windows, target_arch = "x86"))]
+const TEXTURE_SAMPLER: usize = 0x7044a0;
+
+/// The supported Windows Noita build (Jan 25 2025) checks texture alpha before
+/// constructing a cell. Match the entire constructor, sampler, texel lookup,
+/// and liquid initializer so a changed ABI or installed hook disables retry.
+#[cfg(all(windows, target_arch = "x86"))]
+unsafe fn supports_texture_hole_retry(construct_cell: *const c_void) -> bool {
+    if construct_cell as usize != 0x7048c0 {
+        return false;
+    }
+    // FNV-1a fingerprints of the mapped .text ranges, tested in call order.
+    // SAFETY: from_raw supplies a mapped engine function. Before reading its
+    // call targets, require an exact match to the known constructor code.
+    [
+        (0x7048c0, 0x16c, 0x3d2a_a73a_5eeb_6b81u64),
+        (TEXTURE_SAMPLER, 0xdd, 0x26e2_1fec_87aa_7c89),
+        (0x7042c0, 0x61, 0xa5d3_251f_a26b_bdec),
+        (0x70ae10, 0x103, 0xa482_9feb_e9e2_0a25),
+    ]
+    .into_iter()
+    .all(|(address, length, expected)| {
+        let code = unsafe { std::slice::from_raw_parts(address as *const u8, length) };
+        code.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3)
+        }) == expected
+    })
+}
+
+#[cfg(all(windows, target_arch = "x86"))]
+unsafe fn opaque_texel(x: i32, y: i32, material: *const ntypes::CellData) -> bool {
+    let colour: u32;
+    // The verified engine sampler takes x/y in ECX/EDX and the material on
+    // the stack. Its plain RET leaves the stack argument for the caller.
+    unsafe {
+        std::arch::asm!(
+            "push {material}",
+            "call eax",
+            "add esp, 4",
+            material = in(reg) material,
+            inlateout("eax") TEXTURE_SAMPLER => colour,
+            inlateout("ecx") x => _,
+            inlateout("edx") y => _,
+            clobber_abi("C"),
+        );
+    }
+    colour & 0xff00_0000 != 0
+}
+
+#[cfg(any(test, all(windows, target_arch = "x86")))]
+fn retry_at_opaque_texel<T>(
+    x: i32,
+    y: i32,
+    mut opaque: impl FnMut(i32, i32) -> bool,
+    construct: impl FnOnce(i32, i32) -> Option<T>,
+) -> Option<T> {
+    if opaque(x, y) {
+        // An opaque destination's constructor failed for a different reason.
+        return None;
+    }
+    for distance in 1..=4 {
+        for (dx, dy) in [(distance, 0), (-distance, 0), (0, distance), (0, -distance)] {
+            if let (Some(sx), Some(sy)) = (x.checked_add(dx), y.checked_add(dy)) {
+                if opaque(sx, sy) {
+                    // A refusal at an opaque texel is not a texture hole.
+                    return construct(sx, sy);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// How `decode_area` finds the slot for a cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CellAccess {
@@ -174,6 +247,8 @@ pub(crate) struct WorldFns {
     chunk_loaded: abi::ChunkLoadedFn,
     remove_cell: abi::RemoveCellFn,
     construct_cell: abi::ConstructCellFn,
+    #[cfg(all(windows, target_arch = "x86"))]
+    texture_hole_retry: bool,
     /// Highest material id the game knows about. Discovered at runtime on the
     /// Lua side, so it accounts for modded material sets.
     last_material_id: i16,
@@ -229,6 +304,8 @@ impl WorldFns {
                 construct_cell: std::mem::transmute::<*const c_void, abi::ConstructCellFn>(
                     construct_cell,
                 ),
+                #[cfg(all(windows, target_arch = "x86"))]
+                texture_hole_retry: supports_texture_hole_retry(construct_cell),
                 last_material_id,
                 cell_access,
             })
@@ -600,14 +677,44 @@ impl TerrainGrid for LiveTerrainGrid<'_> {
     }
 
     fn construct(&mut self, x: i32, y: i32, material: i16, flags: u8) -> eyre::Result<bool> {
-        let pointer = unsafe {
+        let target = self.state.material_ptr(material);
+        let construct = |x, y| unsafe {
             (self.fns.construct_cell)(
                 self.state._world_ptr,
                 x,
                 y,
-                self.state.material_ptr(material),
+                target,
                 std::ptr::null_mut(),
             )
+        };
+        let pointer = construct(x, y);
+        #[cfg(all(windows, target_arch = "x86"))]
+        let pointer = if pointer.is_null()
+            && self.fns.texture_hole_retry
+            && unsafe {
+                (*target).cell_type == ntypes::CellType::Liquid
+                    && (*target).cell_holes_in_texture != 0
+            }
+        {
+            if let Some(sample) = retry_at_opaque_texel(
+                x,
+                y,
+                |sx, sy| unsafe { opaque_texel(sx, sy, target) },
+                |sx, sy| std::ptr::NonNull::new(construct(sx, sy)),
+            ) {
+                let cell = sample.cast::<ntypes::LiquidCell>().as_ptr();
+                // The verified initializer creates an unattached liquid
+                // cell, with x/y independent of the sampled colour.
+                unsafe {
+                    std::ptr::addr_of_mut!((*cell).x).write(x);
+                    std::ptr::addr_of_mut!((*cell).y).write(y);
+                }
+                sample.as_ptr()
+            } else {
+                pointer
+            }
+        } else {
+            pointer
         };
         if pointer.is_null() {
             return Ok(false);
@@ -1494,5 +1601,84 @@ mod tests {
         assert!(code_matches(CHUNK_LOADED_CODE, &[CHUNK_LOADED_CODE]));
         assert!(!code_matches(&CHUNK_LOADED_CODE[1..], &[CHUNK_LOADED_CODE]));
         assert!(!code_matches(GET_CELL_CODE[0], &[CHUNK_LOADED_CODE]));
+    }
+
+    #[test]
+    fn texture_hole_retry_only_searches_after_proving_transparency() {
+        let mut calls = Vec::new();
+        let sample: Option<()> = retry_at_opaque_texel(
+            -2150,
+            10033,
+            |x, y| {
+                calls.push((x, y));
+                true
+            },
+            |_, _| unreachable!("opaque target must not retry"),
+        );
+        assert_eq!(sample, None);
+        assert_eq!(calls, [(-2150, 10033)]);
+    }
+
+    #[test]
+    fn texture_hole_retry_uses_only_the_first_opaque_sample() {
+        let mut calls = Vec::new();
+        let sample = retry_at_opaque_texel(
+            316,
+            9832,
+            |x, y| {
+                calls.push((x, y));
+                (x, y) == (315, 9832)
+            },
+            |x, y| Some((x, y)),
+        );
+        assert_eq!(sample, Some((315, 9832)));
+        assert_eq!(calls, [(316, 9832), (317, 9832), (315, 9832)]);
+    }
+
+    #[test]
+    fn texture_hole_retry_is_bounded_and_all_transparent_stays_blocked() {
+        let mut calls = Vec::new();
+        let sample: Option<()> = retry_at_opaque_texel(
+            2,
+            -3,
+            |x, y| {
+                calls.push((x, y));
+                false
+            },
+            |_, _| unreachable!("no opaque sample to construct"),
+        );
+        assert_eq!(sample, None);
+        assert_eq!(calls.len(), 17);
+        assert!(calls.iter().all(|&(x, y)| (x - 2).abs() + (y + 3).abs() <= 4));
+        assert_eq!(
+            retry_at_opaque_texel(
+                i32::MAX,
+                i32::MIN,
+                |x, y| (x, y) == (i32::MIN, i32::MIN),
+                |x, y| Some((x, y)),
+            ),
+            None,
+        );
+    }
+
+    #[test]
+    fn texture_hole_retry_refusal_at_first_opaque_sample_stays_blocked() {
+        let mut samples = Vec::new();
+        let mut attempts = Vec::new();
+        let result: Option<()> = retry_at_opaque_texel(
+            316,
+            9832,
+            |x, y| {
+                samples.push((x, y));
+                (x, y) != (316, 9832)
+            },
+            |x, y| {
+                attempts.push((x, y));
+                None // The constructor refuses every placement.
+            },
+        );
+        assert_eq!(result, None);
+        assert_eq!(samples, [(316, 9832), (317, 9832)]);
+        assert_eq!(attempts, [(317, 9832)]);
     }
 }

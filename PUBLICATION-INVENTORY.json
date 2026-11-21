@@ -1,6 +1,6 @@
 {
-  "baselineSourceZipSha256": "c544bdca8ea95227fe2f859550b829f82be3d366111687b73ead05859c310076",
-  "build": 24,
+  "baselineSourceZipSha256": "ce6223edaf47b7909355d85e929970b87a8ee73798bb0e0d61e1dd1e8a75539b",
+  "build": 25,
   "channel": "staging",
   "files": {
     ".gitignore": {
@@ -128,12 +128,12 @@
       "size": 8214
     },
     "ewext/src/noita/decode.rs": {
-      "sha256": "0ecd7863429fdc3fe01531336477a39c0a822c6c618283af9d87ad25d7036bbf",
-      "size": 61039
+      "sha256": "d3060e0a5a85e93dcab6d11c0255005485e0cc5ede96887def52ad9a8512977d",
+      "size": 67682
     },
     "ewext/src/noita/ntypes.rs": {
-      "sha256": "95ce978355dc326289baa999f74dd17e369c119a82d22817b379cb0342975773",
-      "size": 2141
+      "sha256": "24624d93c56fea058003fa5a714c03d762ffd38e11a63acc99dba6ba35c20f55",
+      "size": 2679
     },
     "ewext/src/noita/pixel.rs": {
       "sha256": "9775b7988c329f509f359ea114b1d49bdebee0d4767a8fba83b2ec7686b1a411",
@@ -692,7 +692,7 @@
       "size": 5460
     },
     "playtest/Playtest.cs": {
-      "sha256": "9e3b99b2a37d9dedb6d4c3e3bfe43354ec9a1747253b27801d30d5d7fcd9305a",
+      "sha256": "b5ebfd3a0b353e12c2f0b8af4acd90ef45e20361a6eb7b7eb703c7bec8f77911",
       "size": 38117
     },
     "playtest/PlaytestMigration.cs": {
@@ -728,8 +728,8 @@
       "size": 6267
     },
     "playtest/STAGING-PLAYER-INSTRUCTIONS.txt": {
-      "sha256": "ffead56b1832d47d0eba835675b5a311f17127415ad27ea803c0db41b03e3b1b",
-      "size": 2505
+      "sha256": "74ffdf82bfa64137a642a8fb469a530c29cc445c30b7f4864fe25b449466afc0",
+      "size": 2797
     },
     "playtest/SessionDummyProxy.cs": {
       "sha256": "97d131144f0d1d9e18989910a101f873880bf18b1d730ea02e805999401c10d9",
@@ -3540,8 +3540,8 @@
       "size": 10394
     },
     "tests/test_terrain_feedback_barrier.py": {
-      "sha256": "37ddbe05001b9a43dd2145693587d3be2c0a0ac1ef1f9a9ab557224d39c9ec89",
-      "size": 21032
+      "sha256": "41c0b7623cbb0347d14c07815290a5ea0f8b77b1568d7db7d2975eafcf1862fd",
+      "size": 21424
     },
     "tests/test_wand_inspection.py": {
       "sha256": "84811041c538be83479a2cc72ca96fabce1b0cf1b450d5d1868a5e024f0caee1",
@@ -3681,6 +3681,6 @@
     }
   },
   "schema": 1,
-  "treeInventorySha256": "8d9f8ad0b6417cfd3891dc8b193e5f38cadb0eac917983534f7faa5fa253de97",
-  "version": "1.9.18.17"
+  "treeInventorySha256": "22d04cac62c8d2cb2c675f93f0960cb9f85eed32a0f7943bd44ae53bd92732a0",
+  "version": "1.9.18.18"
 }
