@@ -1,0 +1,14 @@
+{
+  "assetId": 773841913,
+  "build": 23,
+  "channel": "staging",
+  "launcherProtocol": 2,
+  "manifestSha256": "1dd8d847447e879551d923c26fee41f271f8cf201796da24747da59edbffeba5",
+  "name": "Noita-CoopPlus-1.9.18.16-build23-STAGING-win.zip",
+  "releaseId": 453315914,
+  "schema": 1,
+  "sha256": "cf1e51147c0d85cadf2e79a4120644da31d18f62053b5178af1c4c5d4c00eaeb",
+  "size": 25695518,
+  "tag": "coopplus-staging-v1.9.18.16-b23",
+  "version": "1.9.18.16"
+}
