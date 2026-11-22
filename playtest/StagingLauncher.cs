@@ -22,11 +22,12 @@ namespace CoopPlusPlaytest {
         readonly ProgressBar busy = new ProgressBar { Dock = DockStyle.Top, Height = 8, Style = ProgressBarStyle.Marquee, Visible = false };
         bool working, exporting;
         int preparation;
+        LauncherWindowIcon shellIcon;
 
         StagingLauncher(string package) {
             this.package = package;
             Text = "Co-op+ Staging";
-            using (var artwork = typeof(StagingLauncher).Assembly.GetManifestResourceStream("CoopPlus.Staging.ico"))
+            using (var artwork = typeof(StagingLauncher).Assembly.GetManifestResourceStream(LauncherWindowIcon.Resource))
                 Icon = new Icon(artwork);
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(556, 272);
@@ -80,6 +81,15 @@ namespace CoopPlusPlaytest {
             launch.Enabled = update.Enabled = !value;
             UseWaitCursor = false;
         }
+        protected override void OnHandleCreated(EventArgs e) {
+            base.OnHandleCreated(e);
+            shellIcon = LauncherWindowIcon.TryAttach(Handle, package, Text);
+        }
+        protected override void OnHandleDestroyed(EventArgs e) {
+            if (shellIcon != null) { shellIcon.Dispose(); shellIcon = null; }
+            base.OnHandleDestroyed(e);
+        }
+
         void Report(string message) {
             if (IsDisposed) return;
             BeginInvoke((MethodInvoker)(() => {

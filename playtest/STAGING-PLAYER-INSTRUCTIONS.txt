@@ -1,4 +1,4 @@
-CO-OP+ STAGING 1.9.18.18 build 25
+CO-OP+ STAGING 1.9.18.19 build 26
 
 Extract this ZIP into a fresh local folder on each PC. Keep Steam open,
 open Co-op+ Staging.exe and select Launch Staging. If asked, choose the
@@ -28,21 +28,17 @@ diagnostic events and privacy markers for withheld text.
 Match the R- labels in INDEX.txt between PCs for accepted shared runs.
 Use UTC time and role for failed attempts with no recorded shared run.
 
-With an existing build 23 or 24 installation, close Noita, the proxy and
-the Staging launcher. If you still use a stock build 23 or 24 launcher,
-download CoopPlus-Staging25-Launcher-Refresh.exe from the build 25 release.
-Put it beside Co-op+ Staging.exe and open the refresh program once. It
-checks the launcher and its original bundle, and keeps the old EXE.
-If your launcher is already patched, skip this refresh.
-Open Co-op+ Staging.exe, select Check for update and confirm build 25.
-Your private run, preferences and logs stay in the same folder.
+With an existing build 25 installation, close Noita and the proxy. Open
+your existing Co-op+ Staging.exe, select Check for update and confirm
+build 26. Your launcher EXE, private run, preferences and logs stay in
+the same folder. Choose Continue in the proxy and Noita.
 
-If you already use the sealed build 22, close its launcher, proxy and
-game. Extract this ZIP over that same Staging folder and open the new
-launcher. Select Check for update and confirm the bundled build 25.
+The launcher in this fresh Windows ZIP uses full color in Explorer and
+grayscale while running. The proxy stays in color. The game window uses
+the artwork from your local Noita copy when available.
 
-Build 25 retries a confirmed transparent texel in certain textured
-liquids, including steelmoss, on the supported Windows engine. Existing
+Build 26 keeps build 25's retry for a confirmed transparent texel in
+textured liquids, including steelmoss, on the supported Windows engine. Existing
 terrain quarantines are retained. Guest-side steelmoss repair remains a
 playtest objective. Keep both players' stopped backups if a pause recurs.
 

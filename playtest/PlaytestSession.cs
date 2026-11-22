@@ -196,6 +196,10 @@ namespace CoopPlusPlaytest {
             return result.ToArray();
         }
         internal static int Run(string root,SessionAudit audit,Action<string> status) {
+            using (var gameIcon = new NoitaWindowIcon(root, audit))
+                return RunSession(root, audit, status, gameIcon);
+        }
+        static int RunSession(string root,SessionAudit audit,Action<string> status,NoitaWindowIcon gameIcon) {
             var proxies=new List<ProcessIdentity>();var games=new Dictionary<int,ProcessIdentity>();var gameHandles=new Dictionary<int,Process>();var captures=new List<Task>();string[] forwarded=new string[0];int restarts=0;int result=0;
             while(true) {
                 var start=Playtest.StartInfo(root);start.EnvironmentVariables["COOPPLUS_PLAYTEST_SESSION"]=audit.Id;start.EnvironmentVariables["COOPPLUS_PLAYTEST_SESSION_DIR"]=audit.DirectoryPath;
@@ -212,6 +216,7 @@ namespace CoopPlusPlaytest {
                     while(!proxy.WaitForExit(250)) {
                         EndIdentity(proxy,identity);
                         Games(root,proxies,games,gameHandles,audit,()=>EndIdentity(proxy,identity));proxy.Refresh();
+                        gameIcon.Observe(gameHandles.Values);
                         if(!visible&&proxy.MainWindowHandle!=IntPtr.Zero&&IsWindowVisible(proxy.MainWindowHandle)){visible=true;audit.Write("proxy-window-visible",new{identity=identity,startupMs=startup.Elapsed.TotalMilliseconds});Status(status,"Co-op+ Staging is running. Close the private game and proxy normally when finished.");}
                         if(!visible&&!waitingNotice&&startup.ElapsedMilliseconds>=15000){waitingNotice=true;audit.Write("proxy-window-wait",new{identity=identity,startupMs=startup.Elapsed.TotalMilliseconds});Status(status,"The private proxy is running but has not shown a window yet. Logs are retained; it will not be killed or automatically restarted.");}
                         if(!diagnosticsNotice&&audit.DiagnosticWriteError!=null){diagnosticsNotice=true;Status(status,"Session diagnostics could not be retained. Close the private game and proxy normally; no automatic retry or reset is attempted. "+audit.DiagnosticWriteError);}

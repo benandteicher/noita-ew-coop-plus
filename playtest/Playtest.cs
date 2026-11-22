@@ -31,9 +31,9 @@ namespace CoopPlusPlaytest {
     }
     public sealed class VerifiedPayload { public string package, payload; public Manifest manifest; public string hash; }
     public static class Playtest {
-        public const string RuntimeId = "coopplus-staging-b25-v1.9.18.18";
-        public const string Version = "1.9.18.18";
-        public const long Build = 25;
+        public const string RuntimeId = "coopplus-staging-b26-v1.9.18.19";
+        public const string Version = "1.9.18.19";
+        public const long Build = 26;
         public const string Channel = "staging";
         internal const string PrivateName = "staging-private";
         internal const string PayloadName = "staging-payload";
@@ -279,7 +279,15 @@ namespace CoopPlusPlaytest {
                 var r = ReadReady(root);
                 if (!Matches(r, verified)) throw new IOException("The Staging profile and selected runtime disagree. Keep the folder for review.");
                 Phase("Verifying private game and retained Continue");
-                Verify(Path.Combine(root, "game"), r.game);
+                string retainedGame = Child(root, "game");
+                string icon = Child(retainedGame, NoitaWindowIcon.RelativePath);
+                Entry[] gameFiles = r.game;
+                // Older profiles inventoried this cosmetic BMP. Its absence
+                // is harmless when the approved engine manifest does not require it.
+                if (gameFiles != null && !File.Exists(icon) && !Directory.Exists(icon) &&
+                    !m.ownedGame.Any(x => CI.Equals(x.path, NoitaWindowIcon.RelativePath)))
+                    gameFiles = gameFiles.Where(x => !CI.Equals(x.path, NoitaWindowIcon.RelativePath)).ToArray();
+                Verify(retainedGame, gameFiles);
                 foreach(var expected in m.ownedGame)if(!r.game.Any(x=>CI.Equals(x.path,expected.path)&&x.size==expected.size&&x.sha256==expected.sha256))throw new IOException("The retained private engine does not match this frozen package; no progress was changed.");
                 VerifySaveFolders(root);
                 Phase("Verifying private frozen runtime"); VerifyRuntime(root, m); VerifySaveFolders(root);

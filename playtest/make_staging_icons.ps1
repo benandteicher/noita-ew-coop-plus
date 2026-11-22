@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$Png,
-    [Parameter(Mandatory=$true)][string]$OutputDirectory
+    [Parameter(Mandatory=$true)][string]$OutputDirectory,
+    [switch]$Grayscale
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,6 +26,16 @@ try {
             $g.PixelOffsetMode = [Drawing.Drawing2D.PixelOffsetMode]::Half
             $g.DrawImage($original, [Drawing.Rectangle]::new(0, 0, $size, $size))
             if ($bitmap.GetPixel(0, 0).A -ne 0) { throw "Staging icon lost transparency at $size pixels." }
+            if ($Grayscale) {
+                for ($y = 0; $y -lt $size; $y++) {
+                    for ($x = 0; $x -lt $size; $x++) {
+                        $pixel = $bitmap.GetPixel($x, $y)
+                        if ($pixel.A -eq 0) { continue }
+                        $gray = [int][Math]::Floor((299*$pixel.R + 587*$pixel.G + 114*$pixel.B + 500)/1000)
+                        $bitmap.SetPixel($x, $y, [Drawing.Color]::FromArgb($pixel.A, $gray, $gray, $gray))
+                    }
+                }
+            }
             $bitmap.Save($data, [Drawing.Imaging.ImageFormat]::Png)
             $frames.Add($size.ToString(), $data.ToArray())
         } finally {

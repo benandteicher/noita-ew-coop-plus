@@ -1,6 +1,6 @@
 {
-  "baselineSourceZipSha256": "239b94b9700a4574555259509561a80ccc595afff24b54172e6cb734c2c0d72f",
-  "build": 25,
+  "baselineSourceZipSha256": "2e4bab110b6ad392f128bd7dccf41a22e2c0b31e48936563d338c0a47201f045",
+  "build": 26,
   "channel": "staging",
   "files": {
     ".gitignore": {
@@ -687,6 +687,14 @@
       "sha256": "dcacf3c51724f77b2d285a6eaa0e900c9f836449877abd357d6522460620066c",
       "size": 6655
     },
+    "playtest/LauncherWindowIcon.cs": {
+      "sha256": "ffb8ff26f054cf4ea72cc6f81fc01c5c4b4e79eef8416a1feb332ec6f9067c4e",
+      "size": 5331
+    },
+    "playtest/NoitaWindowIcon.cs": {
+      "sha256": "83da051b4ec6bfe15d406da5496ee0710923e5d249cc741bb4e664b76d3ea22a",
+      "size": 9039
+    },
     "playtest/PLAYER-INSTRUCTIONS-TEST21.txt": {
       "sha256": "c373f43e19a2c635a29b7d0318d9c58d3b84d2f6bc9b4114f52f1fb3c4212ad8",
       "size": 2844
@@ -696,8 +704,8 @@
       "size": 5460
     },
     "playtest/Playtest.cs": {
-      "sha256": "b5ebfd3a0b353e12c2f0b8af4acd90ef45e20361a6eb7b7eb703c7bec8f77911",
-      "size": 38117
+      "sha256": "97d8a737f7202b1624c711ae250144940895956d7e24d7204432f222fa7769c1",
+      "size": 38749
     },
     "playtest/PlaytestMigration.cs": {
       "sha256": "072d0e15aaaed2f01840fcc2c5792bcbea50a64a64c0fc373f52a153bc41d6d1",
@@ -712,8 +720,8 @@
       "size": 7650
     },
     "playtest/PlaytestSession.cs": {
-      "sha256": "bc4aca1f629cd0412f0ad51ef0b4ce0a42cef05ebf3dfcc80bc26cef5b80ea3a",
-      "size": 25278
+      "sha256": "6e3b77e651e37d666f1dfae8b30269b96c3d63a4890db7bf6b28c6b82f31faa0",
+      "size": 25595
     },
     "playtest/PlaytestSessionProcessTests.cs": {
       "sha256": "7d6c666eb9054c0853ee598e10be67d7d62fca5cd010f131b52496cff3431aa6",
@@ -732,8 +740,8 @@
       "size": 6267
     },
     "playtest/STAGING-PLAYER-INSTRUCTIONS.txt": {
-      "sha256": "6488a7ea28b9f0c7b9fb0b3b4e304c07dbc643e079d4ba0d7588036a424079e7",
-      "size": 3024
+      "sha256": "7d57782eb76936359263db02b359a2d58825fd960f2b87410e9c3b359f5b349a",
+      "size": 2744
     },
     "playtest/SessionDummyProxy.cs": {
       "sha256": "97d131144f0d1d9e18989910a101f873880bf18b1d730ea02e805999401c10d9",
@@ -744,8 +752,8 @@
       "size": 21940
     },
     "playtest/StagingLauncher.cs": {
-      "sha256": "e42731d2e2b58c3a75fd0814df22b5d7f52bef5ca466fadf7811a7d56a022dd2",
-      "size": 16064
+      "sha256": "f5140f028bab693c0eb3f18877f7235192b23988011bfff9173f67040546babb",
+      "size": 16487
     },
     "playtest/StagingLogs.cs": {
       "sha256": "b62bdeb7f41daf2e8852200550194b54d35885b5808fa204dbab51059fd8413e",
@@ -760,12 +768,16 @@
       "size": 21369
     },
     "playtest/build.ps1": {
-      "sha256": "3b7bef637686278d6935423aeeb24e105b4e74116e7104a3e4bf057c0b2710d0",
-      "size": 3336
+      "sha256": "66365b90528c0bc2b649cb7f54ee7d2ac54ffc17ccd9012bab88f89780ba00e1",
+      "size": 3501
     },
     "playtest/make_staging_icons.ps1": {
-      "sha256": "43e13eab56acba5c38522288388fa27c05a2e2ab626949af69a76edefb0b0d11",
-      "size": 2864
+      "sha256": "9aac82fe87a4dc2725cf13e0481db2a9fb4fba9696474148eb399a583d2f4846",
+      "size": 3408
+    },
+    "playtest/staging-launcher-window.ico": {
+      "sha256": "2f8a7a68f60de52e3dc6854dbaf96505da28caade0101746041f64069a8dd960",
+      "size": 8992
     },
     "playtest/staging22-manifest.json": {
       "sha256": "3f35fc14b55596d0789454d870c0f56712c5c0838770760161772c32d75d5f48",
@@ -3685,6 +3697,6 @@
     }
   },
   "schema": 1,
-  "treeInventorySha256": "f7bb8b2880553656f106436d63d9d29af7a2409debb6cc94447c9950e0d8cc12",
-  "version": "1.9.18.18"
+  "treeInventorySha256": "4d0bd129c52a22fe79af18f41bc179ff0556e1f1a7855a5c1526098f7e8b4f3a",
+  "version": "1.9.18.19"
 }
