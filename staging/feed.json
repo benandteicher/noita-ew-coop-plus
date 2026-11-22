@@ -1,14 +1,14 @@
 {
-  "assetId": 774034982,
-  "build": 24,
+  "assetId": 777346226,
+  "build": 25,
   "channel": "staging",
   "launcherProtocol": 2,
-  "manifestSha256": "eb3dad8834d1d945311259b92a17b0f21c56add5a05287a120a0a96b44c6dcdc",
-  "name": "Noita-CoopPlus-1.9.18.17-build24-STAGING-win.zip",
-  "releaseId": 453359279,
+  "manifestSha256": "c75fca97e7bbc205e12c709f011ee6162c4c59a65fde3740a11c6f894e1ca982",
+  "name": "Noita-CoopPlus-1.9.18.18-build25-STAGING-win.zip",
+  "releaseId": 454086885,
   "schema": 1,
-  "sha256": "a51ee4359911716a6c65f3b3ca5e75883ad4c5ab1f70ea3e1f62193349cbb0f0",
-  "size": 25663715,
-  "tag": "coopplus-staging-v1.9.18.17-b24",
-  "version": "1.9.18.17"
+  "sha256": "a50e93532d871689b0ccd3910eba22a44921d445b0375a1839af47e869823a81",
+  "size": 25665730,
+  "tag": "coopplus-staging-v1.9.18.18-b25",
+  "version": "1.9.18.18"
 }
