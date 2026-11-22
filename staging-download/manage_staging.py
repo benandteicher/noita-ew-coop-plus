@@ -47,7 +47,12 @@ def verify_local(path):
     require(proof["tag"] == tag and re.fullmatch(r"[0-9a-f]{40}", proof["sourceCommit"])
             and re.fullmatch(r"[0-9a-f]{40}", proof["sourceTree"]), "Unexpected source binding.")
     source = f"CoopPlus-Staging{build}-source-{proof['sourceTree'][:12]}.zip"
-    require(set(proof["assets"]) == {full, source, "staging-release.json", "BUILD-PROVENANCE.json", "SHA256SUMS.txt"},
+    expected_assets = {full, source, "staging-release.json", "BUILD-PROVENANCE.json", "SHA256SUMS.txt"}
+    if "launcherRefresh" in proof:
+        refresh = proof["launcherRefresh"]
+        require(refresh == f"CoopPlus-Staging{build}-Launcher-Refresh.exe", "Unexpected launcher refresh asset.")
+        expected_assets.add(refresh)
+    require(set(proof["assets"]) == expected_assets,
             "Frozen draft must contain the exact package, source, provenance, metadata and checksum.")
     for name, record in proof["assets"].items():
         require(re.fullmatch(r"[A-Za-z0-9_.-]+", name) and name not in (".", ".."), "Unsafe asset name.")

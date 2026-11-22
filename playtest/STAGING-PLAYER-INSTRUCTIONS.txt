@@ -28,11 +28,14 @@ diagnostic events and privacy markers for withheld text.
 Match the R- labels in INDEX.txt between PCs for accepted shared runs.
 Use UTC time and role for failed attempts with no recorded shared run.
 
-With an existing build 23 or 24 installation, close Noita and its proxy.
-Use Check for update from the launcher you already have when build 25 is
-selected on the Staging feed. Confirm the offered version. Your private
-run, preferences and logs stay in the same folder. The public Staging
-download link is for new downloads.
+With an existing build 23 or 24 installation, close Noita, the proxy and
+the Staging launcher. If you still use a stock build 23 or 24 launcher,
+download CoopPlus-Staging25-Launcher-Refresh.exe from the build 25 release.
+Put it beside Co-op+ Staging.exe and open the refresh program once. It
+checks the launcher and its original bundle, and keeps the old EXE.
+If your launcher is already patched, skip this refresh.
+Open Co-op+ Staging.exe, select Check for update and confirm build 25.
+Your private run, preferences and logs stay in the same folder.
 
 If you already use the sealed build 22, close its launcher, proxy and
 game. Extract this ZIP over that same Staging folder and open the new

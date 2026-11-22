@@ -22,7 +22,27 @@ namespace CoopPlusPlaytest {
         }
         static void Put(string path,byte[] bytes) { Playtest.Canon(path);Directory.CreateDirectory(Path.GetDirectoryName(path));using(var stream=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.None)){stream.Write(bytes,0,bytes.Length);stream.Flush(true);} }
         static bool Matches(string path,Entry e) { return e!=null&&File.Exists(path)&&new FileInfo(path).Length==e.size&&Playtest.Hash(path)==e.sha256; }
-        static string Signature(Entry[] files) { return Json.Serialize(files.OrderBy(x=>x.path,CI).Select(x=>new Entry{path=x.path,size=x.size,sha256=x.sha256}).ToArray()); }
+        static bool ValidFingerprint(Entry entry) {
+            return entry != null && !String.IsNullOrWhiteSpace(entry.path) &&
+                entry.size >= 0 && StagingRelease.ValidHash(entry.sha256);
+        }
+        internal static bool SameOwnedGame(Entry[] installed, Entry[] offered) {
+            if (installed == null || offered == null || installed.Length == 0 || installed.Length != offered.Length)
+                return false;
+            var remaining = new Dictionary<string, Entry>(CI);
+            foreach (var entry in installed) {
+                if (!ValidFingerprint(entry) || remaining.ContainsKey(entry.path)) return false;
+                remaining.Add(entry.path, entry);
+            }
+            foreach (var entry in offered) {
+                Entry previous;
+                if (!ValidFingerprint(entry) || !remaining.TryGetValue(entry.path, out previous) ||
+                    entry.size != previous.size || entry.sha256 != previous.sha256)
+                    return false;
+                remaining.Remove(entry.path);
+            }
+            return remaining.Count == 0;
+        }
         static Change[] Delta(Manifest old,Manifest next) {
             var before=old.files.ToDictionary(x=>x.path,CI);var after=next.files.ToDictionary(x=>x.path,CI);
             return before.Keys.Union(after.Keys,CI).OrderBy(x=>x,CI).Select(path=>new Change{path=path,before=before.ContainsKey(path)?before[path]:null,after=after.ContainsKey(path)?after[path]:null}).Where(c=>c.before==null||c.after==null||c.before.size!=c.after.size||c.before.sha256!=c.after.sha256).ToArray();
@@ -63,7 +83,7 @@ namespace CoopPlusPlaytest {
             if (next.manifest.channel != Playtest.Channel || next.manifest.build <= old.build ||
                 new Version(next.manifest.version) <= new Version(old.version))
                 throw new IOException("Choose a newer approved Staging build.");
-            if (Signature(next.manifest.ownedGame) != Signature(old.ownedGame))
+            if (!SameOwnedGame(old.ownedGame, next.manifest.ownedGame))
                 throw new IOException("This update requires a different local Noita version. The current Staging installation is still available.");
             return old;
         }
@@ -122,7 +142,9 @@ namespace CoopPlusPlaytest {
         }
         internal static void Upgrade(string root, Ready ready, VerifiedPayload previous, VerifiedPayload verified) {
             Playtest.CheckStopped();var old=Predecessor(previous,verified,ready);
-            Playtest.Phase("Verifying accepted predecessor before private runtime upgrade");Playtest.VerifyRuntime(root,old);CheckUnmanaged(root,old);Playtest.VerifySaveFolders(root);
+            Playtest.Phase("Verifying accepted predecessor before private runtime upgrade");
+            Playtest.Verify(Playtest.Child(root, "game"), old.ownedGame);
+            Playtest.VerifyRuntime(root,old);CheckUnmanaged(root,old);Playtest.VerifySaveFolders(root);
             var changes=Delta(old,verified.manifest);
             string readyPath=Playtest.Child(root,"ready.json");byte[] readyBytes=File.ReadAllBytes(readyPath);
             var j=new Journal{id=Guid.NewGuid().ToString("N"),root=root,fromHash=ready.payloadHash,toHash=verified.hash,readyHash=Playtest.HashBytes(readyBytes),mutable=Capture(root),changes=changes};

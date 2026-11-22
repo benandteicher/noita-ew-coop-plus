@@ -1,5 +1,5 @@
 {
-  "baselineSourceZipSha256": "ce6223edaf47b7909355d85e929970b87a8ee73798bb0e0d61e1dd1e8a75539b",
+  "baselineSourceZipSha256": "239b94b9700a4574555259509561a80ccc595afff24b54172e6cb734c2c0d72f",
   "build": 25,
   "channel": "staging",
   "files": {
@@ -683,6 +683,10 @@
       "sha256": "0fb442a9b996e259644da06d0d8019b5de1b279ae5a54145ca41b82326d2db0a",
       "size": 12786
     },
+    "playtest/LauncherRefresh.cs": {
+      "sha256": "dcacf3c51724f77b2d285a6eaa0e900c9f836449877abd357d6522460620066c",
+      "size": 6655
+    },
     "playtest/PLAYER-INSTRUCTIONS-TEST21.txt": {
       "sha256": "c373f43e19a2c635a29b7d0318d9c58d3b84d2f6bc9b4114f52f1fb3c4212ad8",
       "size": 2844
@@ -696,8 +700,8 @@
       "size": 38117
     },
     "playtest/PlaytestMigration.cs": {
-      "sha256": "59b6a838b665d9470f2aa505c80c16d0b1b2da260a3ec92552b880c389372c31",
-      "size": 15829
+      "sha256": "072d0e15aaaed2f01840fcc2c5792bcbea50a64a64c0fc373f52a153bc41d6d1",
+      "size": 16853
     },
     "playtest/PlaytestMigrationTests.cs": {
       "sha256": "9855e2a6f6277f4b69e9a0922024cbb6efd208695e2a7cc9460851d7897b3182",
@@ -728,8 +732,8 @@
       "size": 6267
     },
     "playtest/STAGING-PLAYER-INSTRUCTIONS.txt": {
-      "sha256": "74ffdf82bfa64137a642a8fb469a530c29cc445c30b7f4864fe25b449466afc0",
-      "size": 2797
+      "sha256": "6488a7ea28b9f0c7b9fb0b3b4e304c07dbc643e079d4ba0d7588036a424079e7",
+      "size": 3024
     },
     "playtest/SessionDummyProxy.cs": {
       "sha256": "97d131144f0d1d9e18989910a101f873880bf18b1d730ea02e805999401c10d9",
@@ -756,8 +760,8 @@
       "size": 21369
     },
     "playtest/build.ps1": {
-      "sha256": "6f13a12241b30531c174038c0594ff43debeb91d178073761ead3a2b2e64e6fc",
-      "size": 2035
+      "sha256": "3b7bef637686278d6935423aeeb24e105b4e74116e7104a3e4bf057c0b2710d0",
+      "size": 3336
     },
     "playtest/make_staging_icons.ps1": {
       "sha256": "43e13eab56acba5c38522288388fa27c05a2e2ab626949af69a76edefb0b0d11",
@@ -3256,8 +3260,8 @@
       "size": 4526
     },
     "staging-download/manage_staging.py": {
-      "sha256": "f4b5ab41267a7d4034fe75621a0653af3125fa6cb4a77be59d9c287e293953c3",
-      "size": 10747
+      "sha256": "fe10382ae92c7f9a61371c149c8c7a51ce8fe15d490acfa5f6721ade0cc76962",
+      "size": 11014
     },
     "test-download/README.md": {
       "sha256": "8f747c6fd857d34a049d7af2a4581887a5492ba2abbb5d498e19554c4034acf0",
@@ -3681,6 +3685,6 @@
     }
   },
   "schema": 1,
-  "treeInventorySha256": "22d04cac62c8d2cb2c675f93f0960cb9f85eed32a0f7943bd44ae53bd92732a0",
+  "treeInventorySha256": "f7bb8b2880553656f106436d63d9d29af7a2409debb6cc94447c9950e0d8cc12",
   "version": "1.9.18.18"
 }
